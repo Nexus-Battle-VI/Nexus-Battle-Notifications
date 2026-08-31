@@ -29,7 +29,10 @@ const buildEmailSender = (config: AppConfig): EmailSenderPort => {
     const transport = nodemailer.createTransport({
       host: config.smtpHost,
       port: config.smtpPort,
-      secure: false,
+      secure: config.smtpPort === 465,
+      ...(config.smtpUser === null || config.smtpPass === null
+        ? {}
+        : { auth: { user: config.smtpUser, pass: config.smtpPass } }),
     })
 
     return new SmtpEmailSender({ transport, from: config.emailFrom })

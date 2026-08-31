@@ -105,4 +105,45 @@ describe('Servidor de sondas de salud', () => {
     expect(response.status).toBe(405)
     expect(response.body).toEqual({ error: 'method_not_allowed' })
   })
+
+  it('sin enqueue, POST /dev/enqueue responde 404', async () => {
+    const response = await request(server, '/dev/enqueue', 'POST')
+
+    expect(response.status).toBe(404)
+  })
+})
+
+describe('Servidor de sondas: enqueue local', () => {
+  it('publica el cuerpo cuando enqueue esta inyectado', async () => {
+    const published: string[] = []
+    const local = createHealthServer({
+      port: 0,
+      logger,
+      version,
+      readinessChecks: [],
+      enqueue: (body) => {
+        published.push(body)
+      },
+    })
+
+    await new Promise((resolve) => local.once('listening', resolve))
+
+    const { port } = local.address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${String(port)}/dev/enqueue`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        notificationId: 'n-1',
+        recipient: 'jugador@nexus.test',
+        templateId: 'account-password-recovery-code',
+        variables: { code: '000000' },
+      }),
+    })
+
+    expect(response.status).toBe(202)
+    expect(published).toHaveLength(1)
+    expect(published[0]).toContain('account-password-recovery-code')
+
+    await close(local)
+  })
 })
