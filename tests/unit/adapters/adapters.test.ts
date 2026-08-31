@@ -127,6 +127,23 @@ describe('InMemoryTemplateRenderer', () => {
     expect(rendered.text).toBe('Hola , tu cuenta fue creada correctamente.')
   })
 
+  it('renderiza el codigo de recuperacion de contrasena', async () => {
+    const rendered = await renderer.render('account-password-recovery-code', { code: '000000' })
+
+    expect(rendered.subject).toBe('Restablece tu contraseña de Nexus Battles')
+    expect(rendered.html).toContain('<strong>000000</strong>')
+    expect(rendered.html).toContain('Equipo Nexus Battles')
+    expect(rendered.text).toContain('000000')
+    expect(rendered.text).toContain('Si no solicitaste este cambio')
+  })
+
+  it('renderiza la confirmacion de cambio de contrasena', async () => {
+    const rendered = await renderer.render('account-password-reset-confirmation', {})
+
+    expect(rendered.subject).toBe('Tu contraseña de Nexus Battles fue actualizada')
+    expect(rendered.text).toContain('tu contraseña se actualizó correctamente.')
+  })
+
   it('interpola tambien el asunto', async () => {
     const rendered = await renderer.render('commerce-order-confirmed', {
       displayName: 'Ana',
@@ -147,6 +164,8 @@ describe('InMemoryTemplateRenderer', () => {
 
   it('informa si conoce una plantilla', () => {
     expect(renderer.has('account-welcome')).toBe(true)
+    expect(renderer.has('account-password-recovery-code')).toBe(true)
+    expect(renderer.has('account-password-reset-confirmation')).toBe(true)
     expect(renderer.has('inexistente')).toBe(false)
   })
 

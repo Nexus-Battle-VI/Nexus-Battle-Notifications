@@ -22,4 +22,36 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
     html: '<p>Hola {{displayName}},</p><p>Tu pedido <strong>{{orderId}}</strong> fue confirmado por un total de {{total}}.</p>',
     text: 'Hola {{displayName}}, tu pedido {{orderId}} fue confirmado por un total de {{total}}.',
   },
+  'account-password-recovery-code': {
+    subject: 'Restablece tu contraseña de Nexus Battles',
+    html:
+      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
+      '<p>Hola, hemos recibido una solicitud para <strong>restablecer la contraseña</strong> de tu cuenta.</p>' +
+      '<p>Para continuar con el proceso, utiliza el siguiente código de verificación:</p>' +
+      '<p><strong>{{code}}</strong></p>' +
+      '<p>Este código es válido por unos minutos y solo puede utilizarse una vez.</p>' +
+      '<p>Si <strong>no solicitaste este cambio</strong>, puedes ignorar este mensaje. Tu contraseña actual no se modificará mientras no se complete el proceso.</p>' +
+      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
+    text:
+      'Nexus Battles\n\n' +
+      'Hola, hemos recibido una solicitud para restablecer la contraseña de tu cuenta.\n\n' +
+      'Para continuar con el proceso, utiliza el siguiente código de verificación:\n\n' +
+      '{{code}}\n\n' +
+      'Este código es válido por unos minutos y solo puede utilizarse una vez.\n\n' +
+      'Si no solicitaste este cambio, puedes ignorar este mensaje. Tu contraseña actual no se modificará mientras no se complete el proceso.\n\n' +
+      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+  },
+  'account-password-reset-confirmation': {
+    subject: 'Tu contraseña de Nexus Battles fue actualizada',
+    html:
+      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
+      '<p>Hola, tu contraseña se actualizó correctamente.</p>' +
+      '<p>Si <strong>no solicitaste este cambio</strong>, avisa al equipo.</p>' +
+      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
+    text:
+      'Nexus Battles\n\n' +
+      'Hola, tu contraseña se actualizó correctamente.\n\n' +
+      'Si no solicitaste este cambio, avisa al equipo.\n\n' +
+      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+  },
 }
