@@ -30,6 +30,8 @@ export interface AppConfig {
   readonly emailFrom: string
   readonly smtpHost: string
   readonly smtpPort: number
+  readonly smtpUser: string | null
+  readonly smtpPass: string | null
   readonly queueDriver: QueueDriver
   readonly queueUrl: string | null
   readonly awsRegion: string | null
@@ -158,6 +160,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     emailFrom: readString(env, 'EMAIL_FROM', 'no-reply@nexus-battles.local'),
     smtpHost: readString(env, 'SMTP_HOST', 'localhost'),
     smtpPort: readInteger(env, 'SMTP_PORT', 1025, 1, 65_535),
+    smtpUser: readString(env, 'SMTP_USER', '') || null,
+    smtpPass: readString(env, 'SMTP_PASS', '') || null,
     queueDriver,
     queueUrl: queueUrl === '' ? null : queueUrl,
     awsRegion: awsRegion === '' ? null : awsRegion,
