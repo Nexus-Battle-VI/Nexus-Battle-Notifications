@@ -27,6 +27,14 @@ const healthServer = createHealthServer({
     { name: 'consumer', check: (): boolean => state.running },
     { name: 'queue', check: (): boolean => state.lastPollSucceeded },
   ],
+  ...(config.nodeEnv === 'development'
+    ? {
+        enqueue: (body: string): void => {
+          app.queue.publish(body)
+          app.logger.info('notification_enqueued')
+        },
+      }
+    : {}),
 })
 
 const sleep = (ms: number): Promise<void> =>
