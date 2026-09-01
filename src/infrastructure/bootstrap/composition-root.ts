@@ -7,6 +7,7 @@ import { FakeEmailSender } from '../../adapters/email/FakeEmailSender.js'
 import { SmtpEmailSender } from '../../adapters/email/SmtpEmailSender.js'
 import { InMemoryTemplateRenderer } from '../../adapters/templates/InMemoryTemplateRenderer.js'
 import { DEFAULT_TEMPLATES } from '../../adapters/templates/default-templates.js'
+import { SesEmailSender } from '../../adapters/email/SesEmailSender.js'
 import { InMemoryMessageQueue } from '../../adapters/messaging/InMemoryMessageQueue.js'
 import { NotificationConsumer } from '../../adapters/messaging/NotificationConsumer.js'
 import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIdempotencyStore.js'
@@ -25,6 +26,14 @@ export interface Application {
 }
 
 const buildEmailSender = (config: AppConfig): EmailSenderPort => {
+  if (config.emailDriver === EmailDriver.Ses) {
+    // `loadConfig` ya garantiza que la region existe con este driver.
+    return new SesEmailSender({
+      client: SesEmailSender.createClient(config.awsRegion ?? ''),
+      from: config.emailFrom,
+    })
+  }
+
   if (config.emailDriver === EmailDriver.Smtp) {
     const transport = nodemailer.createTransport({
       host: config.smtpHost,

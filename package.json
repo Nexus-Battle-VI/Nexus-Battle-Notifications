@@ -27,6 +27,7 @@
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
   },
   "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1123.0",
     "nodemailer": "9.0.5"
   },
   "devDependencies": {

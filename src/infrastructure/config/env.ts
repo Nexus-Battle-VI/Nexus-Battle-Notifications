@@ -8,6 +8,7 @@ export class ConfigurationError extends Error {
 export const EmailDriver = {
   Fake: 'fake',
   Smtp: 'smtp',
+  Ses: 'ses',
 } as const
 
 export type EmailDriver = (typeof EmailDriver)[keyof typeof EmailDriver]
@@ -109,7 +110,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const emailDriver = readEnum(
     env,
     'EMAIL_DRIVER',
-    [EmailDriver.Fake, EmailDriver.Smtp],
+    [EmailDriver.Fake, EmailDriver.Smtp, EmailDriver.Ses],
     EmailDriver.Fake,
   )
   const queueDriver = readEnum(
@@ -120,6 +121,10 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   )
   const queueUrl = env['QUEUE_URL'] ?? null
   const awsRegion = env['AWS_REGION'] ?? null
+
+  if (emailDriver === EmailDriver.Ses && (awsRegion === null || awsRegion === '')) {
+    throw new ConfigurationError('AWS_REGION es obligatorio cuando EMAIL_DRIVER es "ses".')
+  }
 
   if (queueDriver === QueueDriver.Sqs) {
     if (queueUrl === null || queueUrl === '') {
