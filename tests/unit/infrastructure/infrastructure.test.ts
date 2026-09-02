@@ -16,6 +16,9 @@ describe('loadConfig', () => {
       serviceName: 'nexus-battle-notifications',
       logLevel: 'info',
       healthPort: 3001,
+      ingestEnabled: false,
+      ingestPort: 3002,
+      ingestSharedSecret: null,
       emailDriver: 'fake',
       smtpUser: null,
       smtpPass: null,
@@ -89,8 +92,33 @@ describe('loadConfig', () => {
     expect(config.awsRegion).toBe('us-east-1')
   })
 
+  it('activa la ingesta y lee su puerto y secreto', () => {
+    const config = loadConfig({
+      INGEST_ENABLED: 'true',
+      INGEST_PORT: '4002',
+      INGEST_SHARED_SECRET: 'secreto',
+    })
+
+    expect(config.ingestEnabled).toBe(true)
+    expect(config.ingestPort).toBe(4002)
+    expect(config.ingestSharedSecret).toBe('secreto')
+  })
+
+  /**
+   * El choque de puertos solo importa si la ingesta esta encendida: apagada,
+   * nadie escucha en `INGEST_PORT` y coincidir es inofensivo.
+   */
+  it('admite que los puertos coincidan si la ingesta esta apagada', () => {
+    expect(() => loadConfig({ INGEST_ENABLED: 'false', INGEST_PORT: '3001' })).not.toThrow()
+  })
+
   it.each([
     ['un valor fuera del catalogo', { LOG_LEVEL: 'verbose' }],
+    ['un booleano que no es "true" ni "false"', { INGEST_ENABLED: '1' }],
+    [
+      'la ingesta compartiendo puerto con las sondas',
+      { INGEST_ENABLED: 'true', INGEST_PORT: '3001', HEALTH_PORT: '3001' },
+    ],
     ['un entero mal formado', { HEALTH_PORT: 'abc' }],
     ['un decimal donde se espera entero', { BATCH_SIZE: '2.5' }],
     ['un valor fuera de rango', { BATCH_SIZE: '99' }],

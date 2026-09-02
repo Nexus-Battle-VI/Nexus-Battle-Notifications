@@ -1,6 +1,7 @@
 import { loadConfig } from './infrastructure/config/env.js'
 import { buildApplication } from './infrastructure/bootstrap/composition-root.js'
 import { createHealthServer } from './infrastructure/http/health-server.js'
+import { createIngestServer } from './infrastructure/http/ingest-server.js'
 
 const config = loadConfig(process.env)
 const app = buildApplication(config)
@@ -42,6 +43,21 @@ const sleep = (ms: number): Promise<void> =>
     setTimeout(resolve, ms).unref()
   })
 
+/**
+ * Ingesta HTTP: el tramo Account -> Notifications (ADR-006, ingesta HTTP).
+ *
+ * Solo se levanta si `INGEST_ENABLED=true`. Apagado por defecto para que un
+ * entorno que no lo necesita no abra un puerto que no espera.
+ */
+const ingestServer = config.ingestEnabled
+  ? createIngestServer({
+      port: config.ingestPort,
+      logger: app.logger,
+      publish: (body) => app.queue.publish(body),
+      sharedSecret: config.ingestSharedSecret,
+    })
+  : null
+
 const shutdown = (signal: string): void => {
   if (!state.running) {
     return
@@ -49,6 +65,7 @@ const shutdown = (signal: string): void => {
 
   state.running = false
   app.logger.info('worker_shutdown_requested', { signal })
+  ingestServer?.close()
   healthServer.close(() => {
     app.logger.info('worker_stopped')
   })
@@ -65,6 +82,7 @@ process.on('SIGINT', () => {
 app.logger.info('worker_started', {
   emailDriver: config.emailDriver,
   queueDriver: config.queueDriver,
+  ingestEnabled: config.ingestEnabled,
   batchSize: config.batchSize,
   pollIntervalMs: config.pollIntervalMs,
 })

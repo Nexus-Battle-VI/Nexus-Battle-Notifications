@@ -26,6 +26,9 @@ export interface AppConfig {
   readonly version: string
   readonly logLevel: 'debug' | 'info' | 'warn' | 'error'
   readonly healthPort: number
+  readonly ingestEnabled: boolean
+  readonly ingestPort: number
+  readonly ingestSharedSecret: string | null
   readonly emailDriver: EmailDriver
   readonly emailFrom: string
   readonly smtpHost: string
@@ -101,6 +104,25 @@ const readString = (env: RawEnv, key: string, fallback: string): string => {
 }
 
 /**
+ * Solo admite "true" y "false" literales. Un valor cualquiera no se interpreta
+ * como verdadero: activar por accidente un servidor que recibe peticiones seria
+ * justo el tipo de sorpresa que esta configuracion debe evitar.
+ */
+const readBoolean = (env: RawEnv, key: string, fallback: boolean): boolean => {
+  const raw = env[key]
+
+  if (raw === undefined || raw === '') {
+    return fallback
+  }
+
+  if (raw !== 'true' && raw !== 'false') {
+    throw new ConfigurationError(`${key} debe ser "true" o "false". Se recibio "${raw}".`)
+  }
+
+  return raw === 'true'
+}
+
+/**
  * Construye la configuracion a partir del entorno. Es una funcion pura sobre
  * `env`: no lee `process.env` directamente, de modo que puede verificarse
  * completa sin contaminar el proceso de pruebas.
@@ -138,6 +160,19 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     }
   }
 
+  const healthPort = readInteger(env, 'HEALTH_PORT', 3001, 1, 65_535)
+  const ingestEnabled = readBoolean(env, 'INGEST_ENABLED', false)
+  const ingestPort = readInteger(env, 'INGEST_PORT', 3002, 1, 65_535)
+
+  // Dos servidores no pueden compartir puerto: el segundo fallaria al escuchar
+  // con EADDRINUSE, ya arrancado el proceso y con las sondas respondiendo. Se
+  // detecta aqui para que el worker no arranque aparentando salud.
+  if (ingestEnabled && ingestPort === healthPort) {
+    throw new ConfigurationError(
+      'INGEST_PORT no puede coincidir con HEALTH_PORT: son dos servidores distintos.',
+    )
+  }
+
   const retryBaseDelayMs = readInteger(env, 'RETRY_BASE_DELAY_MS', 1_000, 0, 600_000)
   const retryMaxDelayMs = readInteger(env, 'RETRY_MAX_DELAY_MS', 60_000, 0, 3_600_000)
 
@@ -155,7 +190,10 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     serviceName: readString(env, 'SERVICE_NAME', 'nexus-battle-notifications'),
     version: readString(env, 'SERVICE_VERSION', '0.1.0'),
     logLevel: readEnum(env, 'LOG_LEVEL', ['debug', 'info', 'warn', 'error'] as const, 'info'),
-    healthPort: readInteger(env, 'HEALTH_PORT', 3001, 1, 65_535),
+    healthPort,
+    ingestEnabled,
+    ingestPort,
+    ingestSharedSecret: readString(env, 'INGEST_SHARED_SECRET', '') || null,
     emailDriver,
     emailFrom: readString(env, 'EMAIL_FROM', 'no-reply@nexus-battles.local'),
     smtpHost: readString(env, 'SMTP_HOST', 'localhost'),
