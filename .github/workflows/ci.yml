@@ -1,8 +1,16 @@
 name: CI
 
 on:
+  # Sin filtro de rama destino: se valida TODO pull request, tambien los que
+  # apuntan a `develop` o a otra rama de trabajo.
+  #
+  # Con el filtro anterior, un PR hacia `develop` no ejecutaba NINGUNA
+  # comprobacion. Y `develop` esta protegida exigiendo `Calidad y pruebas`:
+  # comprobaciones que nunca se reportaban, de modo que el PR no podia
+  # satisfacer su propia proteccion y quedaba bloqueado sin explicacion.
+  #
+  # El `push` si se limita a `main`, que es la unica rama que publica imagen.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
