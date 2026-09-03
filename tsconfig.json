@@ -29,5 +29,11 @@
 
     "types": ["node", "jest"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "jest.config.js", "eslint.config.js"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "jest.config.js",
+    "jest.db.config.js",
+    "eslint.config.js"
+  ]
 }

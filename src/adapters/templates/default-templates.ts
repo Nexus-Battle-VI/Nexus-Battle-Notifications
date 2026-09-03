@@ -7,6 +7,11 @@ import type { TemplateDefinition } from './InMemoryTemplateRenderer.js'
  * `docs/contracts`. Anadir o retirar una plantilla es un cambio de contrato.
  */
 export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
+  'commerce-purchase-confirmed-v1': {
+    subject: 'Nexus Battles VI — Confirmacion de compra {{orderId}}',
+    html: '<p><strong>Nexus Battles VI · UPB-COMPANY</strong></p><p>Tu compra simulada {{orderId}} se completo correctamente.</p><ul>{{itemsHtml}}</ul><p><strong>Total pagado: {{total}}</strong></p><p>Gracias por jugar con nosotros. Equipo Nexus Battles VI.</p>',
+    text: 'Nexus Battles VI · UPB-COMPANY\nTu compra simulada {{orderId}} se completo correctamente.\n{{itemsText}}\nTotal pagado: {{total}}\nGracias por jugar con nosotros. Equipo Nexus Battles VI.',
+  },
   'account-verification-code': {
     subject: 'Tu codigo de verificacion de Nexus Battles',
     html: '<p>Hola {{displayName}},</p><p>Tu codigo de verificacion es <strong>{{code}}</strong>. Caduca en {{expiresInMinutes}} minutos.</p>',

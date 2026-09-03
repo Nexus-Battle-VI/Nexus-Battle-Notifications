@@ -106,6 +106,10 @@ docker run --rm -p 3001:3001 nexus-battle-notifications:local
 
 La imagen es multi-etapa, se ejecuta con el usuario sin privilegios `node`, incluye solo dependencias de producción y no contiene secretos.
 
+## Confirmacion de compras
+
+La entrada interna desde el outbox de Commerce, inbox Mongo y limites de entrega SMTP estan en [docs/purchase-confirmation.md](docs/purchase-confirmation.md).
+
 ## Contribución
 
 Se aplican las convenciones descritas en [CONTRIBUTING.md](CONTRIBUTING.md) y la [política de trazabilidad entre repositorios](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/blob/main/docs/governance/cross-repository-traceability.md) de Management.
