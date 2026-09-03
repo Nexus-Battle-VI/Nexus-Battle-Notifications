@@ -31,7 +31,7 @@ export interface Application {
   readonly idempotencyStore: InMemoryIdempotencyStore
 }
 
-const buildEmailSender = (config: AppConfig): EmailSenderPort => {
+export const buildEmailSender = (config: AppConfig): EmailSenderPort => {
   if (config.emailDriver === EmailDriver.Ses) {
     // `loadConfig` ya garantiza que la region existe con este driver.
     return new SesEmailSender({

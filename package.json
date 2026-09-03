@@ -24,16 +24,19 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects unit",
     "test:integration": "node --experimental-vm-modules node_modules/jest/bin/jest.js --selectProjects integration",
-    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage"
+    "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
+    "test:db": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.db.config.js --coverage"
   },
   "dependencies": {
     "@aws-sdk/client-sesv2": "^3.1123.0",
     "@aws-sdk/client-sqs": "^3.1125.0",
+    "mongodb": "6.21.0",
     "nodemailer": "9.0.5"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@jest/globals": "30.4.1",
+    "@testcontainers/mongodb": "12.1.0",
     "@types/jest": "30.0.0",
     "@types/node": "24.13.3",
     "@types/nodemailer": "8.0.1",

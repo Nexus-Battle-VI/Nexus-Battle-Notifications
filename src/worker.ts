@@ -2,9 +2,21 @@ import { loadConfig } from './infrastructure/config/env.js'
 import { buildApplication } from './infrastructure/bootstrap/composition-root.js'
 import { createHealthServer } from './infrastructure/http/health-server.js'
 import { createIngestServer } from './infrastructure/http/ingest-server.js'
+import { buildPurchaseApplication } from './infrastructure/bootstrap/purchase-application.js'
+import { createPurchaseServer } from './infrastructure/http/purchase-server.js'
 
 const config = loadConfig(process.env)
 const app = buildApplication(config)
+const purchaseApp = await buildPurchaseApplication(config)
+const purchaseServer =
+  purchaseApp !== null && config.purchase !== null
+    ? createPurchaseServer({
+        port: config.purchase.port,
+        sharedSecret: config.purchase.secret,
+        useCase: purchaseApp.useCase,
+        logger: app.logger,
+      })
+    : null
 
 /**
  * Estado observable del worker. Se agrupa en un objeto porque las sondas de
@@ -14,6 +26,7 @@ const app = buildApplication(config)
 const state = {
   running: true,
   lastPollSucceeded: true,
+  purchaseReady: true,
 }
 
 const healthServer = createHealthServer({
@@ -27,6 +40,9 @@ const healthServer = createHealthServer({
   readinessChecks: [
     { name: 'consumer', check: (): boolean => state.running },
     { name: 'queue', check: (): boolean => state.lastPollSucceeded },
+    ...(purchaseApp === null
+      ? []
+      : [{ name: 'purchase-inbox', check: (): boolean => state.purchaseReady }]),
   ],
   ...(config.nodeEnv === 'development'
     ? {
@@ -73,6 +89,11 @@ const shutdown = (signal: string): void => {
   state.running = false
   app.logger.info('worker_shutdown_requested', { signal })
   ingestServer?.close()
+  purchaseServer?.close(() => {
+    void purchaseApp?.close().catch(() => {
+      app.logger.error('purchase_inbox_close_failed')
+    })
+  })
   healthServer.close(() => {
     app.logger.info('worker_stopped')
   })
@@ -95,6 +116,13 @@ app.logger.info('worker_started', {
 })
 
 while (state.running) {
+  if (purchaseApp !== null) {
+    try {
+      state.purchaseReady = await purchaseApp.ready()
+    } catch {
+      state.purchaseReady = false
+    }
+  }
   try {
     const summary = await app.consumer.processBatch()
     const catalogSummary = await app.catalogEventsConsumer.processBatch()
