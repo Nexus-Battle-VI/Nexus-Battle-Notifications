@@ -93,6 +93,31 @@ describe('Flujo completo de notificaciones', () => {
     expect(harness.queue.inFlightCount).toBe(0)
   })
 
+  it('entrega la notificacion de cierre de eliminacion de cuenta (HU-43.4) sin variables', async () => {
+    const harness = buildHarness()
+    harness.queue.publish(
+      message({
+        notificationId: 'n-cierre-1',
+        templateId: 'account-deletion-closed',
+        variables: {},
+      }),
+    )
+
+    const summary = await harness.consumer.processBatch()
+
+    expect(summary).toEqual({
+      received: 1,
+      sent: 1,
+      duplicated: 0,
+      requeued: 0,
+      deadLettered: 0,
+    })
+    expect(harness.emailSender.sent[0]?.subject).toBe(
+      'Tu solicitud de eliminación de cuenta ha finalizado',
+    )
+    expect(harness.emailSender.sent[0]?.text).toContain('ha finalizado')
+  })
+
   it('procesa varios mensajes en un solo lote', async () => {
     const harness = buildHarness()
     harness.queue.publish(message({ notificationId: 'n-1' }))

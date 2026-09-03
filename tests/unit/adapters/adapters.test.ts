@@ -144,6 +144,32 @@ describe('InMemoryTemplateRenderer', () => {
     expect(rendered.text).toContain('tu contraseña se actualizó correctamente.')
   })
 
+  it('renderiza la notificacion de cierre de eliminacion de cuenta (HU-43.4)', async () => {
+    const rendered = await renderer.render('account-deletion-closed', {})
+
+    expect(rendered.subject).toBe('Tu solicitud de eliminación de cuenta ha finalizado')
+    expect(rendered.text).toContain(
+      'el proceso de eliminación de tu cuenta que solicitaste ha finalizado',
+    )
+    expect(rendered.html).toContain('Equipo Nexus Battles')
+    // El cierre no debe afirmar mas de lo que el alcance vigente de HU-43
+    // establece: nada sobre otros bounded contexts, retencion o base legal.
+    expect(rendered.text).not.toMatch(/community|commerce|catalog|inventario|retenci[oó]n/i)
+  })
+
+  it('ignora cualquier variable enviada de mas en el cierre de eliminacion: la plantilla no declara marcadores', async () => {
+    const rendered = await renderer.render('account-deletion-closed', {
+      subject: 'sub:ana@nexus.test',
+      accountId: 'acc-123',
+      email: 'ana@nexus.test',
+      jti: 'token-secreto',
+    })
+
+    expect(rendered.subject).toBe('Tu solicitud de eliminación de cuenta ha finalizado')
+    expect(rendered.html).not.toMatch(/sub:ana|acc-123|token-secreto/)
+    expect(rendered.text).not.toMatch(/sub:ana|acc-123|token-secreto/)
+  })
+
   it('interpola tambien el asunto', async () => {
     const rendered = await renderer.render('commerce-order-confirmed', {
       displayName: 'Ana',
@@ -166,6 +192,7 @@ describe('InMemoryTemplateRenderer', () => {
     expect(renderer.has('account-welcome')).toBe(true)
     expect(renderer.has('account-password-recovery-code')).toBe(true)
     expect(renderer.has('account-password-reset-confirmation')).toBe(true)
+    expect(renderer.has('account-deletion-closed')).toBe(true)
     expect(renderer.has('inexistente')).toBe(false)
   })
 

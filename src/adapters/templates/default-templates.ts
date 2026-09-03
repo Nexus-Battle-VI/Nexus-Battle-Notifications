@@ -54,6 +54,19 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
       'Si no solicitaste este cambio, avisa al equipo.\n\n' +
       'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
   },
+  'account-deletion-closed': {
+    subject: 'Tu solicitud de eliminación de cuenta ha finalizado',
+    html:
+      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
+      '<p>Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.</p>' +
+      '<p>Esta es la notificación de cierre de esa solicitud.</p>' +
+      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
+    text:
+      'Nexus Battles\n\n' +
+      'Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.\n\n' +
+      'Esta es la notificación de cierre de esa solicitud.\n\n' +
+      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+  },
   'catalog-product-created': {
     subject: '¡Nuevo producto en el catálogo: {{productName}}!',
     html:
