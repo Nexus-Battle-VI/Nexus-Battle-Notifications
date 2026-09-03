@@ -2,6 +2,7 @@ import nodemailer from 'nodemailer'
 
 import { RetryPolicy } from '../../domain/policies/RetryPolicy.js'
 import { SendTransactionalEmail } from '../../application/use-cases/SendTransactionalEmail.js'
+import { HandleCatalogProductCreated } from '../../application/use-cases/HandleCatalogProductCreated.js'
 import type { EmailSenderPort } from '../../application/ports/EmailSenderPort.js'
 import { FakeEmailSender } from '../../adapters/email/FakeEmailSender.js'
 import { SmtpEmailSender } from '../../adapters/email/SmtpEmailSender.js'
@@ -10,6 +11,9 @@ import { DEFAULT_TEMPLATES } from '../../adapters/templates/default-templates.js
 import { SesEmailSender } from '../../adapters/email/SesEmailSender.js'
 import { InMemoryMessageQueue } from '../../adapters/messaging/InMemoryMessageQueue.js'
 import { NotificationConsumer } from '../../adapters/messaging/NotificationConsumer.js'
+import { CatalogProductEventsConsumer } from '../../adapters/messaging/CatalogProductEventsConsumer.js'
+import { SqsMessageQueue } from '../../adapters/messaging/SqsMessageQueue.js'
+import type { MessageQueuePort } from '../../application/ports/MessageQueuePort.js'
 import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIdempotencyStore.js'
 import { SystemClock } from '../../adapters/clock/SystemClock.js'
 import { LoggingEventPublisher } from '../../adapters/events/LoggingEventPublisher.js'
@@ -20,8 +24,10 @@ import { resolveSqsSettings } from '../aws/sqs-settings.js'
 export interface Application {
   readonly config: AppConfig
   readonly logger: Logger
-  readonly queue: InMemoryMessageQueue
+  readonly queue: MessageQueuePort
+  readonly inMemoryQueue: InMemoryMessageQueue | null
   readonly consumer: NotificationConsumer
+  readonly catalogEventsConsumer: CatalogProductEventsConsumer
   readonly idempotencyStore: InMemoryIdempotencyStore
 }
 
@@ -61,36 +67,65 @@ export const buildApplication = (config: AppConfig): Application => {
     version: config.version,
   })
 
-  if (config.queueDriver === QueueDriver.Sqs) {
-    // La configuracion se valida ahora para que un despliegue mal parametrizado
-    // falle al arrancar y no en el primer mensaje. El adaptador SQS permanece
-    // sujeto a ADR-006: no se sustituye por una simulacion.
-    const settings = resolveSqsSettings({ region: config.awsRegion, queueUrl: config.queueUrl })
-
-    logger.warn('sqs_driver_not_available', {
-      queueName: settings.queueName,
-      region: settings.region,
-      detail: 'El adaptador SQS requiere ADR-006 aprobado. Se usa la cola en memoria.',
-    })
-  }
-
   const clock = new SystemClock()
   const nowMs = (): number => clock.now().getTime()
 
-  const queue = new InMemoryMessageQueue(nowMs)
+  let queue: MessageQueuePort
+  let inMemoryQueue: InMemoryMessageQueue | null = null
+
+  if (config.queueDriver === QueueDriver.Sqs) {
+    const settings = resolveSqsSettings({ region: config.awsRegion, queueUrl: config.queueUrl })
+    logger.info('sqs_driver_initialized', {
+      queueName: settings.queueName,
+      region: settings.region,
+    })
+
+    queue = new SqsMessageQueue({
+      client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
+      queueUrl: config.queueUrl ?? '',
+      deadLetterQueueUrl: config.deadLetterQueueUrl,
+    })
+  } else {
+    inMemoryQueue = new InMemoryMessageQueue(nowMs)
+    queue = inMemoryQueue
+  }
+
+  const catalogQueue: MessageQueuePort =
+    config.queueDriver === QueueDriver.Sqs && config.catalogQueueUrl
+      ? new SqsMessageQueue({
+          client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
+          queueUrl: config.catalogQueueUrl,
+          deadLetterQueueUrl: config.deadLetterQueueUrl,
+        })
+      : queue
+
   const idempotencyStore = new InMemoryIdempotencyStore(nowMs)
+  const emailSender = buildEmailSender(config)
+  const templateRenderer = InMemoryTemplateRenderer.fromRecord(DEFAULT_TEMPLATES)
+  const eventPublisher = new LoggingEventPublisher(logger)
+  const retryPolicy = RetryPolicy.create({
+    maxAttempts: config.maxAttempts,
+    baseDelayMs: config.retryBaseDelayMs,
+    maxDelayMs: config.retryMaxDelayMs,
+  })
 
   const useCase = new SendTransactionalEmail({
-    emailSender: buildEmailSender(config),
-    templateRenderer: InMemoryTemplateRenderer.fromRecord(DEFAULT_TEMPLATES),
+    emailSender,
+    templateRenderer,
     idempotencyStore,
-    eventPublisher: new LoggingEventPublisher(logger),
+    eventPublisher,
     clock,
-    retryPolicy: RetryPolicy.create({
-      maxAttempts: config.maxAttempts,
-      baseDelayMs: config.retryBaseDelayMs,
-      maxDelayMs: config.retryMaxDelayMs,
-    }),
+    retryPolicy,
+    idempotencyTtlMs: config.idempotencyTtlMs,
+  })
+
+  const catalogUseCase = new HandleCatalogProductCreated({
+    emailSender,
+    templateRenderer,
+    idempotencyStore,
+    eventPublisher,
+    clock,
+    retryPolicy,
     idempotencyTtlMs: config.idempotencyTtlMs,
   })
 
@@ -101,5 +136,12 @@ export const buildApplication = (config: AppConfig): Application => {
     batchSize: config.batchSize,
   })
 
-  return { config, logger, queue, consumer, idempotencyStore }
+  const catalogEventsConsumer = new CatalogProductEventsConsumer({
+    queue: catalogQueue,
+    useCase: catalogUseCase,
+    logger,
+    batchSize: config.batchSize,
+  })
+
+  return { config, logger, queue, inMemoryQueue, consumer, catalogEventsConsumer, idempotencyStore }
 }
