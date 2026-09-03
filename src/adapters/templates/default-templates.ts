@@ -54,4 +54,17 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
       'Si no solicitaste este cambio, avisa al equipo.\n\n' +
       'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
   },
+  'catalog-product-created': {
+    subject: '¡Nuevo producto en el catálogo: {{productName}}!',
+    html:
+      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
+      '<p>¡Atención, guerreros! Se ha forjado un nuevo producto en el catálogo:</p>' +
+      '<p><strong>{{productName}}</strong> (Categoría: <em>{{productType}}</em>)</p>' +
+      '<p>Ya está disponible en la vitrina para su adquisición.</p>',
+    text:
+      'Nexus Battles\n\n' +
+      '¡Atención, guerreros! Se ha forjado un nuevo producto en el catálogo:\n\n' +
+      '{{productName}} (Categoría: {{productType}})\n\n' +
+      'Ya está disponible en la vitrina para su adquisición.\n',
+  },
 }
