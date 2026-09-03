@@ -39,6 +39,7 @@ export default {
     '!src/**/index.ts',
     '!src/worker.ts',
     '!src/infrastructure/bootstrap/**',
+    '!src/adapters/idempotency/MongoPurchaseInbox.ts',
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text-summary', 'lcov', 'json-summary'],

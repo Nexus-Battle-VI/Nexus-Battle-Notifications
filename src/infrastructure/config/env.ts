@@ -20,7 +20,16 @@ export const QueueDriver = {
 
 export type QueueDriver = (typeof QueueDriver)[keyof typeof QueueDriver]
 
+export interface PurchaseConfig {
+  readonly port: number
+  readonly secret: string
+  readonly inboxDriver: 'mongo' | 'memory'
+  readonly mongoUrl: string | null
+  readonly databaseName: string
+}
+
 export interface AppConfig {
+  readonly purchase: PurchaseConfig | null
   readonly nodeEnv: 'development' | 'test' | 'production'
   readonly serviceName: string
   readonly version: string
@@ -133,6 +142,12 @@ const readBoolean = (env: RawEnv, key: string, fallback: boolean): boolean => {
  * no debe arrancar y aparentar salud.
  */
 export const loadConfig = (env: RawEnv): AppConfig => {
+  const nodeEnv = readEnum(
+    env,
+    'NODE_ENV',
+    ['development', 'test', 'production'] as const,
+    'development',
+  )
   const emailDriver = readEnum(
     env,
     'EMAIL_DRIVER',
@@ -179,18 +194,44 @@ export const loadConfig = (env: RawEnv): AppConfig => {
 
   const retryBaseDelayMs = readInteger(env, 'RETRY_BASE_DELAY_MS', 1_000, 0, 600_000)
   const retryMaxDelayMs = readInteger(env, 'RETRY_MAX_DELAY_MS', 60_000, 0, 3_600_000)
+  let purchase: PurchaseConfig | null = null
+  if (readBoolean(env, 'PURCHASE_HTTP_ENABLED', false)) {
+    const port = readInteger(env, 'PURCHASE_HTTP_PORT', 3003, 1, 65535)
+    const secret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
+    const inboxDriver = readEnum(
+      env,
+      'PURCHASE_INBOX_DRIVER',
+      ['mongo', 'memory'] as const,
+      'mongo',
+    )
+    const mongoUrl = readString(env, 'MONGO_URL', '') || null
+    if (secret === '')
+      throw new ConfigurationError('INTERNAL_SERVICE_AUTH_SECRET es obligatorio para compras.')
+    if (inboxDriver === 'mongo' && mongoUrl === null)
+      throw new ConfigurationError('MONGO_URL es obligatorio para el inbox de compras.')
+    if (nodeEnv === 'production' && (inboxDriver !== 'mongo' || emailDriver === EmailDriver.Fake)) {
+      throw new ConfigurationError(
+        'Las compras en produccion requieren inbox Mongo y un proveedor real de correo.',
+      )
+    }
+    if (port === healthPort || (ingestEnabled && port === ingestPort))
+      throw new ConfigurationError('PURCHASE_HTTP_PORT debe ser distinto de los otros puertos.')
+    purchase = {
+      port,
+      secret,
+      inboxDriver,
+      mongoUrl,
+      databaseName: readString(env, 'MONGO_DB_NAME', 'notifications'),
+    }
+  }
 
   if (retryMaxDelayMs < retryBaseDelayMs) {
     throw new ConfigurationError('RETRY_MAX_DELAY_MS no puede ser menor que RETRY_BASE_DELAY_MS.')
   }
 
   return {
-    nodeEnv: readEnum(
-      env,
-      'NODE_ENV',
-      ['development', 'test', 'production'] as const,
-      'development',
-    ),
+    nodeEnv,
+    purchase,
     serviceName: readString(env, 'SERVICE_NAME', 'nexus-battle-notifications'),
     version: readString(env, 'SERVICE_VERSION', '0.1.0'),
     logLevel: readEnum(env, 'LOG_LEVEL', ['debug', 'info', 'warn', 'error'] as const, 'info'),
