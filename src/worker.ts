@@ -31,8 +31,10 @@ const healthServer = createHealthServer({
   ...(config.nodeEnv === 'development'
     ? {
         enqueue: (body: string): void => {
-          app.queue.publish(body)
-          app.logger.info('notification_enqueued')
+          if (app.inMemoryQueue) {
+            app.inMemoryQueue.publish(body)
+            app.logger.info('notification_enqueued')
+          }
         },
       }
     : {}),
@@ -53,7 +55,12 @@ const ingestServer = config.ingestEnabled
   ? createIngestServer({
       port: config.ingestPort,
       logger: app.logger,
-      publish: (body) => app.queue.publish(body),
+      publish: (body) => {
+        if (app.inMemoryQueue) {
+          return app.inMemoryQueue.publish(body)
+        }
+        throw new Error('La ingesta HTTP no esta soportada sin InMemoryMessageQueue.')
+      },
       sharedSecret: config.ingestSharedSecret,
     })
   : null
@@ -90,10 +97,14 @@ app.logger.info('worker_started', {
 while (state.running) {
   try {
     const summary = await app.consumer.processBatch()
+    const catalogSummary = await app.catalogEventsConsumer.processBatch()
     state.lastPollSucceeded = true
 
     if (summary.received > 0) {
       app.logger.info('batch_processed', { ...summary })
+    }
+    if (catalogSummary.received > 0) {
+      app.logger.info('catalog_events_batch_processed', { ...catalogSummary })
     }
   } catch (error: unknown) {
     state.lastPollSucceeded = false

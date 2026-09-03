@@ -37,6 +37,8 @@ export interface AppConfig {
   readonly smtpPass: string | null
   readonly queueDriver: QueueDriver
   readonly queueUrl: string | null
+  readonly deadLetterQueueUrl: string | null
+  readonly catalogQueueUrl: string | null
   readonly awsRegion: string | null
   readonly pollIntervalMs: number
   readonly batchSize: number
@@ -144,6 +146,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     QueueDriver.Memory,
   )
   const queueUrl = env['QUEUE_URL'] ?? null
+  const deadLetterQueueUrl = env['DEAD_LETTER_QUEUE_URL'] ?? env['DLQ_URL'] ?? null
+  const catalogQueueUrl = env['CATALOG_QUEUE_URL'] ?? env['CATALOG_EVENTS_QUEUE_URL'] ?? null
   const awsRegion = env['AWS_REGION'] ?? null
 
   if (emailDriver === EmailDriver.Ses && (awsRegion === null || awsRegion === '')) {
@@ -202,6 +206,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     smtpPass: readString(env, 'SMTP_PASS', '') || null,
     queueDriver,
     queueUrl: queueUrl === '' ? null : queueUrl,
+    deadLetterQueueUrl: deadLetterQueueUrl === '' ? null : deadLetterQueueUrl,
+    catalogQueueUrl: catalogQueueUrl === '' ? null : catalogQueueUrl,
     awsRegion: awsRegion === '' ? null : awsRegion,
     pollIntervalMs: readInteger(env, 'POLL_INTERVAL_MS', 1_000, 10, 60_000),
     batchSize: readInteger(env, 'BATCH_SIZE', 10, 1, 10),
