@@ -214,6 +214,48 @@ describe('loadConfig', () => {
 
       expect(config.catalogNotifications?.repositoryDriver).toBe('memory')
     })
+
+    describe('playerInventory (HU-38, resolucion de destinatarios)', () => {
+      it('null cuando falta PLAYER_INVENTORY_BASE_URL: fail closed, no bloquea el arranque', () => {
+        const config = loadConfig({ ...BASE, INTERNAL_SERVICE_AUTH_SECRET: 's' })
+
+        expect(config.catalogNotifications?.playerInventory).toBeNull()
+      })
+
+      it('null cuando falta INTERNAL_SERVICE_AUTH_SECRET aunque haya URL', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+        })
+
+        expect(config.catalogNotifications?.playerInventory).toBeNull()
+      })
+
+      it('se activa con URL y secreto, con timeout por defecto', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+          INTERNAL_SERVICE_AUTH_SECRET: 'secreto-compartido',
+        })
+
+        expect(config.catalogNotifications?.playerInventory).toEqual({
+          baseUrl: 'http://player-inventory:3002',
+          secret: 'secreto-compartido',
+          timeoutMs: 2_000,
+        })
+      })
+
+      it('lee un timeout configurado', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+          INTERNAL_SERVICE_AUTH_SECRET: 'secreto-compartido',
+          PLAYER_INVENTORY_TIMEOUT_MS: '5000',
+        })
+
+        expect(config.catalogNotifications?.playerInventory?.timeoutMs).toBe(5_000)
+      })
+    })
   })
 })
 

@@ -154,19 +154,40 @@ funcional de HU-38 (Management #46), es una consecuencia de compras, no una
 acción administrativa de HU-033 a HU-037. No hay evento de "diseño" (HU-37) en
 Catalog todavía, así que ese tipo de cambio tampoco tiene contraparte real.
 
-### Brecha conocida: destinatarios de suspensión/reactivación
+### Destinatarios de suspensión/reactivación
 
-Player-Inventory no expone ningún contrato -API interna, evento o
-proyección- para resolver "¿qué jugadores poseen el producto X?"; su
-superficie actual solo resuelve la dirección contraria (dado un jugador, qué
-posee). Notifications no tiene permitido acceder directamente a su base de
-datos. `ProductOwnersResolverPort` documenta esta brecha; su única
-implementación, `UnavailableProductOwnersResolver`, declara la resolución "no
-disponible" en vez de inventar una lista. Un evento de suspensión/reactivación
-que llega hoy se confirma con el resultado `RecipientsUnresolved` -no se
-reintenta indefinidamente, porque no es un fallo transitorio- y queda
-registrado para trazabilidad, sin crear ninguna notificación. Resolver esto
-requiere un contrato nuevo entre Player-Inventory e Infrastructure.
+Resuelto contra `Nexus-Battle-Player-Inventory#23`
+(`GET /api/internal/v1/inventory/products/{productId}/owners`, contrato
+servicio-a-servicio con HMAC-SHA256). `PlayerInventoryProductOwnersResolver`
+implementa `ProductOwnersResolverPort`: firma la petición con
+`internal-signature.ts` -la misma función que este servicio ya usaba para
+VERIFICAR la firma de Commerce en `purchase-server.ts`, ahora usada también
+como cliente- y traduce la respuesta a `{ available: true, playerIds }`.
+
+Cualquier fallo -red, timeout, `4xx`/`5xx`, JSON ilegible, forma de respuesta
+inesperada o un `productId` de respuesta que no coincide con el pedido- se
+traduce a `{ available: false, reason }`, **nunca** a `playerIds: []`:
+confundir "no se pudo preguntar" con "no tiene propietarios" perdería
+notificaciones en silencio. `HandleCatalogLifecycleEvent` no cambió: ante
+`available: false` sigue devolviendo `RecipientsUnresolved` -se confirma la
+idempotencia, no se reintenta indefinidamente, y jamás cae a audiencia
+GLOBAL como sustituto-.
+
+El adaptador es **opcional y falla cerrado por diseño**: sin
+`PLAYER_INVENTORY_BASE_URL` o sin `INTERNAL_SERVICE_AUTH_SECRET` (el mismo
+secreto compartido que ya exige `PURCHASE_HTTP_ENABLED`), la composición usa
+`UnavailableProductOwnersResolver` -el mismo comportamiento seguro que existía
+antes de esta integración, no un adaptador nuevo a medio configurar- y lo
+registra al arrancar (`product_owners_resolver_not_configured`). Con ambas
+variables presentes, se registra `product_owners_resolver_configured`.
+
+**Brecha que permanece:** esta integración resuelve el tramo
+Notifications→Player-Inventory. El tramo Catalog→Notifications sigue
+limitado por la brecha de transporte descrita abajo: sin una cola real para
+`catalog.product.suspended`/`reactivated`, el evento no llega en producción
+para que este resolver tenga ocasión de actuar. TASK #175 permanece abierta
+hasta que exista evidencia E2E completa (evento → transporte real →
+Notifications → Player-Inventory → notificación persistida).
 
 ### Brecha conocida: transporte de los cuatro eventos de ciclo de vida
 
