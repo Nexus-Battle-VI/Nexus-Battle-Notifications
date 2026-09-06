@@ -40,6 +40,15 @@ export default {
     '!src/worker.ts',
     '!src/infrastructure/bootstrap/**',
     '!src/adapters/idempotency/MongoPurchaseInbox.ts',
+    '!src/adapters/persistence/MongoCatalogNotificationRepository.ts',
+    '!src/adapters/persistence/MongoGlobalNotificationReceiptRepository.ts',
+    '!src/adapters/persistence/MongoBannerRepository.ts',
+    // Adaptador de red real (JWKS de Cognito); mismo tratamiento que el resto
+    // de infraestructura de terceros de este proyecto (SesEmailSender aparte,
+    // que sí se prueba con AWS SDK mock -no aplica aquí, aws-jwt-verify no
+    // ofrece un mock oficial). La lógica de traducción de claims que sí puede
+    // probarse sin red (`toVerifiedIdentity`) se exporta y se cubre aparte.
+    '!src/adapters/identity/CognitoIdentityVerifier.ts',
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text-summary', 'lcov', 'json-summary'],

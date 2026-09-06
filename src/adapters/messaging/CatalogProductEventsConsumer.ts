@@ -1,5 +1,5 @@
 import type { MessageQueuePort, QueueMessage } from '../../application/ports/MessageQueuePort.js'
-import type { HandleCatalogProductCreated } from '../../application/use-cases/HandleCatalogProductCreated.js'
+import type { CatalogProductCreatedHandler } from '../../application/use-cases/HandleCatalogProductCreated.js'
 import { CatalogEventProcessOutcome } from '../../application/use-cases/HandleCatalogProductCreated.js'
 import type { Logger } from '../../infrastructure/observability/logger.js'
 import {
@@ -9,7 +9,7 @@ import {
 
 export interface CatalogProductEventsConsumerOptions {
   readonly queue: MessageQueuePort
-  readonly useCase: HandleCatalogProductCreated
+  readonly useCase: CatalogProductCreatedHandler
   readonly logger: Logger
   readonly batchSize: number
 }

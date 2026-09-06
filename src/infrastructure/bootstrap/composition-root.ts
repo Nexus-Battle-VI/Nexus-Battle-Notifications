@@ -28,6 +28,10 @@ export interface Application {
   readonly inMemoryQueue: InMemoryMessageQueue | null
   readonly consumer: NotificationConsumer
   readonly catalogEventsConsumer: CatalogProductEventsConsumer
+  /** Cola sobre la que corre `catalogEventsConsumer`. Expuesta para que HU-38 pueda montar un consumidor compuesto sobre el mismo mensaje sin duplicar la elección de cola. */
+  readonly catalogQueue: MessageQueuePort
+  /** Caso de uso de correo de `catalogEventsConsumer`, sin modificar. Expuesto por el mismo motivo que `catalogQueue`. */
+  readonly catalogUseCase: HandleCatalogProductCreated
   readonly idempotencyStore: InMemoryIdempotencyStore
 }
 
@@ -143,5 +147,15 @@ export const buildApplication = (config: AppConfig): Application => {
     batchSize: config.batchSize,
   })
 
-  return { config, logger, queue, inMemoryQueue, consumer, catalogEventsConsumer, idempotencyStore }
+  return {
+    config,
+    logger,
+    queue,
+    inMemoryQueue,
+    consumer,
+    catalogEventsConsumer,
+    catalogQueue,
+    catalogUseCase,
+    idempotencyStore,
+  }
 }

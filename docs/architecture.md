@@ -119,3 +119,101 @@ No se registran cuerpos de correo ni contenido renderizado.
 - No se integra ningún proveedor de correo real. `FakeEmailSender` es el adaptador por defecto y `SmtpEmailSender` apunta a Mailpit en local.
 
 Estas limitaciones están declaradas de forma explícita para que la arquitectura de demo no se confunda con la arquitectura objetivo, documentada en `docs/architecture/target-scale-deployment.md` de Nexus-Battle-Infrastructure.
+
+## HU-38 — Notificaciones de catálogo al iniciar sesión y banner informativo
+
+HU-38 añade un segundo bounded context de lectura/escritura dentro de este mismo
+servicio, deliberadamente separado del correo transaccional:
+
+```text
+CatalogNotification   in-app, dirigida a un jugador o GLOBAL (todos)
+BannerEntry           anuncio administrado manualmente por Admin/Super Admin
+```
+
+**No es el mismo agregado que `Notification`** (correo, HU-04/HU-33.10): sus
+invariantes son distintas -intentos de entrega y política de reintentos de
+proveedor, frente a estado de lectura y consolidación-. `HandleCatalogProductCreated`
+(correo) sigue sin tocarse; `HandleCatalogProductCreatedNotifications` la
+compone junto con la nueva reacción in-app sobre el mismo mensaje de
+`catalog.product.created`, porque `MessageQueuePort` tiene semántica de
+consumidor competitivo y dos consumidores separados sobre la misma cola se
+robarían mensajes en vez de recibirlos los dos.
+
+### Eventos consumidos
+
+| `eventType` (Catalog) | Notificación | Destinatarios |
+| --- | --- | --- |
+| `catalog.product.created` | GLOBAL | Todos (HU-38 no filtra este evento) |
+| `catalog.product.inventory.adjusted` | GLOBAL | Todos |
+| `catalog.product.premium.configured` | GLOBAL | Todos |
+| `catalog.product.suspended` | PLAYER | Quienes poseen el producto |
+| `catalog.product.reactivated` | PLAYER | Quienes poseían el producto |
+
+`catalog.product.stock.depleted` **no se consume**: no aparece en el alcance
+funcional de HU-38 (Management #46), es una consecuencia de compras, no una
+acción administrativa de HU-033 a HU-037. No hay evento de "diseño" (HU-37) en
+Catalog todavía, así que ese tipo de cambio tampoco tiene contraparte real.
+
+### Brecha conocida: destinatarios de suspensión/reactivación
+
+Player-Inventory no expone ningún contrato -API interna, evento o
+proyección- para resolver "¿qué jugadores poseen el producto X?"; su
+superficie actual solo resuelve la dirección contraria (dado un jugador, qué
+posee). Notifications no tiene permitido acceder directamente a su base de
+datos. `ProductOwnersResolverPort` documenta esta brecha; su única
+implementación, `UnavailableProductOwnersResolver`, declara la resolución "no
+disponible" en vez de inventar una lista. Un evento de suspensión/reactivación
+que llega hoy se confirma con el resultado `RecipientsUnresolved` -no se
+reintenta indefinidamente, porque no es un fallo transitorio- y queda
+registrado para trazabilidad, sin crear ninguna notificación. Resolver esto
+requiere un contrato nuevo entre Player-Inventory e Infrastructure.
+
+### Brecha conocida: transporte de los cuatro eventos de ciclo de vida
+
+Infrastructure solo provisiona (como propuesta, ADR-017, no desplegada) una
+cola para `catalog.product.created`. Los otros cuatro eventos de esta tabla no
+tienen canal ni cola definidos todavía. `CatalogLifecycleEventsConsumer` existe
+y se ejercita en memoria (desarrollo y pruebas); en un despliegue real, sin
+`CATALOG_LIFECYCLE_QUEUE_URL`, cae a una cola en memoria local sin transporte,
+lo cual se registra explícitamente en el arranque (`catalog_lifecycle_queue_not_configured`).
+
+### Consolidación
+
+`GetPlayerNotifications` agrupa por `(productId, changeType)`: dos o más
+notificaciones pendientes del mismo producto y mismo tipo de cambio se
+presentan como una entrada ("Armadura de Escamas tuvo 4 actualizaciones
+recientes; ver detalle"), conservando las notificaciones originales para el
+historial. No se agrupan tipos de cambio distintos del mismo producto -una
+suspensión aislada no debe quedar enterrada dentro de un lote de ajustes de
+tiraje-, ni productos distintos entre sí.
+
+### Marcado como leído
+
+Presentar y marcar como leída son dos operaciones separadas
+(`GET .../pending` y `POST .../read`), no una sola: automatizar la escritura
+dentro de la lectura habría hecho que un simple refresco de pantalla marcara
+notificaciones como vistas sin que el jugador las haya visto de verdad.
+
+### Superficie HTTP (opcional, `CATALOG_NOTIFICATIONS_HTTP_ENABLED`)
+
+| Ruta | Método | Quién |
+| --- | --- | --- |
+| `/api/v1/notifications/me/pending` | GET | Jugador autenticado (su propio `sub`) |
+| `/api/v1/notifications/me/history` | GET | Jugador autenticado |
+| `/api/v1/notifications/me/read` | POST | Jugador autenticado |
+| `/api/v1/banners` | GET | Público, sin testimonio |
+| `/api/v1/admin/banners` | GET, POST | ADMINISTRATOR o SUPER_ADMINISTRATOR |
+
+El `playerId` siempre se deriva de `VerifiedIdentity.subject` (testimonio JWT
+de Cognito, verificado con `aws-jwt-verify` igual que Account/Catalog); nunca
+se acepta desde la URL o el cuerpo. MODERATOR no está autorizado sobre el
+banner: HU-38 solo nombra Admin y Super Admin.
+
+### HU-38.6 — Correo: NO APLICA
+
+No se implementó ninguna integración con el módulo de correo para HU-38.
+HU-38 y RF-38 exigen notificación in-app y banner como canal principal; no
+existe una regla de negocio aprobada que obligue a replicar por correo la
+creación, el ajuste de tiraje, la condición Premium, la suspensión o la
+reactivación de un producto. `SesEmailSender`, `SmtpEmailSender` y las
+plantillas existentes no se tocaron.
