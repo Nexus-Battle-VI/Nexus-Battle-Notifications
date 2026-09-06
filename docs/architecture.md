@@ -165,21 +165,62 @@ VERIFICAR la firma de Commerce en `purchase-server.ts`, ahora usada también
 como cliente- y traduce la respuesta a `{ available: true, playerIds }`.
 
 Cualquier fallo -red, timeout, `4xx`/`5xx`, JSON ilegible, forma de respuesta
-inesperada o un `productId` de respuesta que no coincide con el pedido- se
-traduce a `{ available: false, reason }`, **nunca** a `playerIds: []`:
-confundir "no se pudo preguntar" con "no tiene propietarios" perdería
-notificaciones en silencio. `HandleCatalogLifecycleEvent` no cambió: ante
-`available: false` sigue devolviendo `RecipientsUnresolved` -se confirma la
-idempotencia, no se reintenta indefinidamente, y jamás cae a audiencia
-GLOBAL como sustituto-.
+inesperada, un `productId` de respuesta que no coincide con el pedido, o el
+resolver sin configurar (`UnavailableProductOwnersResolver`)- se traduce a
+`{ available: false, reason }`, **nunca** a `playerIds: []`: confundir "no se
+pudo preguntar" con "no tiene propietarios" perdería notificaciones en
+silencio.
 
-El adaptador es **opcional y falla cerrado por diseño**: sin
+**Corrección importante (tras detectar la brecha):** antes de esta
+corrección, `available: false` SIEMPRE confirmaba la idempotencia y
+confirmaba el mensaje (`ACK`) como si hubiera terminado con éxito -una
+decisión razonable mientras la brecha era "el contrato no existe", pero que
+tras integrar una llamada HTTP real (Player-Inventory#23) perdía la
+notificación para siempre ante cualquier fallo transitorio: timeout, un
+reinicio de Player-Inventory, un `503` momentáneo-. Ahora:
+
+```text
+Catalog lifecycle event (suspended/reactivated)
+        ↓
+Notifications (HandleCatalogLifecycleEvent)
+        ↓
+Player-Inventory (ProductOwnersResolverPort)
+        ↓
+disponible          → crear CatalogNotification PLAYER, confirmar, ACK
+no disponible       → liberar idempotencia, NO confirmar, reencolar (RetryPolicy)
+intentos agotados   → confirmar, dead-letter (no se pierde: queda en la DLQ)
+```
+
+`HandleCatalogLifecycleEvent.execute()` ahora recibe `deliveryAttempt` (igual
+que `HandleCatalogProductCreated`) y reutiliza la MISMA `RetryPolicy` -sin
+variables ni números nuevos, `MAX_ATTEMPTS`/`RETRY_BASE_DELAY_MS`/
+`RETRY_MAX_DELAY_MS` de siempre- para decidir entre `Retry` y `DeadLetter`.
+`CatalogLifecycleEventsConsumer` sigue exactamente el mismo patrón de
+`CatalogProductEventsConsumer`: `Retry` reencola (`queue.requeue`, nunca
+`acknowledge`), `DeadLetter` va a la cola de fallidos
+(`queue.deadLetter`), y solo `Processed`/`Duplicated` confirman el mensaje.
+El resolver sin configurar sigue exactamente esta misma ruta -nunca un `ACK`
+permanente disfrazado de éxito, y nunca cae a audiencia GLOBAL como
+sustituto-.
+
+En el caso de `DeadLetter` se confirma la idempotencia (mismo criterio que
+`HandleCatalogProductCreated`): una redelivery del mismo `eventId` no
+reprocesa el mismo fallo indefinidamente. Un replay manual desde la cola de
+fallidos requiere limpiar esa reserva explícitamente, igual que ya exige hoy
+el flujo de correo.
+
+El adaptador HTTP es **opcional y falla cerrado por diseño**: sin
 `PLAYER_INVENTORY_BASE_URL` o sin `INTERNAL_SERVICE_AUTH_SECRET` (el mismo
 secreto compartido que ya exige `PURCHASE_HTTP_ENABLED`), la composición usa
 `UnavailableProductOwnersResolver` -el mismo comportamiento seguro que existía
 antes de esta integración, no un adaptador nuevo a medio configurar- y lo
 registra al arrancar (`product_owners_resolver_not_configured`). Con ambas
-variables presentes, se registra `product_owners_resolver_configured`.
+variables presentes, se registra `product_owners_resolver_configured`. Sigue
+siendo **at-least-once + idempotencia**, nunca exactly-once: una redelivery
+tras un `Retry` puede, en teoría, llegar a resolver dos veces si el reencolado
+compite con una redelivery natural de la cola: la clave de idempotencia sigue
+siendo la única garantía contra notificaciones duplicadas, igual que en el
+resto del servicio.
 
 **Brecha que permanece:** esta integración resuelve el tramo
 Notifications→Player-Inventory. El tramo Catalog→Notifications sigue
