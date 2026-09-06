@@ -36,13 +36,28 @@ export interface CatalogNotificationsConfig {
   readonly cognitoUserPoolId: string
   readonly cognitoClientId: string
   /**
-   * `null` cuando no hay cola dedicada configurada (estado actual en
-   * produccion: Infrastructure no provisiona todavia transporte para
-   * catalog.product.suspended/reactivated/inventory.adjusted/
-   * premium.configured). El consumidor sigue existiendo y puede ejercitarse
-   * en memoria; solo carece de una cola SQS real que alimentarlo.
+   * `null` cuando no hay cola dedicada configurada. El consumidor sigue
+   * existiendo y puede ejercitarse en memoria; solo carece de una cola SQS
+   * real que alimentarlo.
    */
   readonly lifecycleQueueUrl: string | null
+  /**
+   * Transporte de los cuatro eventos de ciclo de vida
+   * (suspended/reactivated/inventory.adjusted/premium.configured),
+   * independiente de `queueDriver` (cola general) y de `catalogQueueDriver`
+   * (`catalog.product.created`).
+   *
+   * ADR-018 (Infrastructure, Accepted) aprobo una cola SQS COMPARTIDA para
+   * estos cuatro eventos, distinta de la de `created` y de la general, con la
+   * condicion explicita de no mezclarlas. Antes de esta variable,
+   * `lifecycleQueue` se activaba con `queueDriver === 'sqs'` -el interruptor
+   * de la cola general- y reenviaba a `deadLetterQueueUrl` -la DLQ general-,
+   * exactamente el mismo acoplamiento que `catalogQueueDriver` ya resolvio
+   * para `created`. Vive aqui, dentro de `CatalogNotificationsConfig` y no en
+   * `AppConfig`, porque `lifecycleQueueUrl` (arriba) ya vivia aqui: es el
+   * lugar arquitectonicamente equivalente, no uno nuevo.
+   */
+  readonly lifecycleQueueDriver: QueueDriver
   /**
    * Resolución real de propietarios (HU-38, TASK #175) contra
    * `Nexus-Battle-Player-Inventory#23`. `null` cuando falta
@@ -365,6 +380,36 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       )
     }
 
+    const lifecycleQueueUrl =
+      env['CATALOG_LIFECYCLE_QUEUE_URL'] === undefined || env['CATALOG_LIFECYCLE_QUEUE_URL'] === ''
+        ? null
+        : env['CATALOG_LIFECYCLE_QUEUE_URL']
+
+    /**
+     * Mismo criterio explicito que `CATALOG_QUEUE_DRIVER`: no se infiere de
+     * la presencia de `CATALOG_LIFECYCLE_QUEUE_URL`.
+     */
+    const lifecycleQueueDriver = readEnum(
+      env,
+      'CATALOG_LIFECYCLE_QUEUE_DRIVER',
+      [QueueDriver.Memory, QueueDriver.Sqs],
+      QueueDriver.Memory,
+    )
+
+    if (lifecycleQueueDriver === QueueDriver.Sqs) {
+      if (lifecycleQueueUrl === null) {
+        throw new ConfigurationError(
+          'CATALOG_LIFECYCLE_QUEUE_URL es obligatorio cuando CATALOG_LIFECYCLE_QUEUE_DRIVER es "sqs".',
+        )
+      }
+
+      if (awsRegion === null || awsRegion === '') {
+        throw new ConfigurationError(
+          'AWS_REGION es obligatorio cuando CATALOG_LIFECYCLE_QUEUE_DRIVER es "sqs".',
+        )
+      }
+    }
+
     catalogNotifications = {
       port,
       repositoryDriver,
@@ -372,11 +417,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       databaseName: readString(env, 'MONGO_DB_NAME', 'notifications'),
       cognitoUserPoolId,
       cognitoClientId,
-      lifecycleQueueUrl:
-        env['CATALOG_LIFECYCLE_QUEUE_URL'] === undefined ||
-        env['CATALOG_LIFECYCLE_QUEUE_URL'] === ''
-          ? null
-          : env['CATALOG_LIFECYCLE_QUEUE_URL'],
+      lifecycleQueueUrl,
+      lifecycleQueueDriver,
       playerInventory: readPlayerInventoryConfig(env),
     }
   }
