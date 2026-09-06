@@ -14,6 +14,8 @@ import { InMemoryGlobalNotificationReceiptRepository } from '../../adapters/pers
 import { InMemoryBannerRepository } from '../../adapters/persistence/InMemoryBannerRepository.js'
 import { CognitoIdentityVerifier } from '../../adapters/identity/CognitoIdentityVerifier.js'
 import { UnavailableProductOwnersResolver } from '../../adapters/identity/UnavailableProductOwnersResolver.js'
+import { PlayerInventoryProductOwnersResolver } from '../../adapters/identity/PlayerInventoryProductOwnersResolver.js'
+import type { ProductOwnersResolverPort } from '../../application/ports/ProductOwnersResolverPort.js'
 import { HandleCatalogLifecycleEvent } from '../../application/use-cases/HandleCatalogLifecycleEvent.js'
 import { GetPlayerNotifications } from '../../application/use-cases/GetPlayerNotifications.js'
 import { MarkNotificationsRead } from '../../application/use-cases/MarkNotificationsRead.js'
@@ -93,7 +95,22 @@ export const buildCatalogNotificationsApplication = async (
     clientId: catalogNotifications.cognitoClientId,
   })
 
-  const productOwnersResolver = new UnavailableProductOwnersResolver()
+  let productOwnersResolver: ProductOwnersResolverPort
+  if (catalogNotifications.playerInventory !== null) {
+    productOwnersResolver = new PlayerInventoryProductOwnersResolver(
+      catalogNotifications.playerInventory,
+    )
+    logger.info('product_owners_resolver_configured', { adapter: 'player-inventory-http' })
+  } else {
+    // Fail closed: sin PLAYER_INVENTORY_BASE_URL/INTERNAL_SERVICE_AUTH_SECRET
+    // no se inventa un destinatario ni se cae a audiencia GLOBAL. Suspension y
+    // reactivacion quedaran en RecipientsUnresolved hasta que se configure.
+    productOwnersResolver = new UnavailableProductOwnersResolver()
+    logger.warn('product_owners_resolver_not_configured', {
+      reason:
+        'Sin PLAYER_INVENTORY_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET: suspension/reactivacion quedaran como recipients-unresolved.',
+    })
+  }
 
   const lifecycleUseCase = new HandleCatalogLifecycleEvent({
     notifications,

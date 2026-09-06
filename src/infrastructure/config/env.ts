@@ -43,6 +43,21 @@ export interface CatalogNotificationsConfig {
    * en memoria; solo carece de una cola SQS real que alimentarlo.
    */
   readonly lifecycleQueueUrl: string | null
+  /**
+   * Resolución real de propietarios (HU-38, TASK #175) contra
+   * `Nexus-Battle-Player-Inventory#23`. `null` cuando falta
+   * `PLAYER_INVENTORY_BASE_URL` o `INTERNAL_SERVICE_AUTH_SECRET`: la
+   * composición cae entonces en `UnavailableProductOwnersResolver` -fail
+   * closed, nunca se inventa un destinatario ni se usa audiencia GLOBAL como
+   * sustituto-.
+   */
+  readonly playerInventory: PlayerInventoryConfig | null
+}
+
+export interface PlayerInventoryConfig {
+  readonly baseUrl: string
+  readonly secret: string
+  readonly timeoutMs: number
 }
 
 export interface AppConfig {
@@ -149,6 +164,31 @@ const readBoolean = (env: RawEnv, key: string, fallback: boolean): boolean => {
   }
 
   return raw === 'true'
+}
+
+/**
+ * `null` si falta `PLAYER_INVENTORY_BASE_URL` o `INTERNAL_SERVICE_AUTH_SECRET`:
+ * ambos son opcionales a proposito (fail closed, no un error de arranque). Sin
+ * ellos, la composicion usa `UnavailableProductOwnersResolver` -el mismo
+ * comportamiento seguro que existia antes de esta integracion-, en vez de
+ * bloquear un despliegue de `CATALOG_NOTIFICATIONS_HTTP_ENABLED=true` que
+ * todavia no conoce Player-Inventory. Se reexamina `INTERNAL_SERVICE_AUTH_SECRET`
+ * aqui en vez de reutilizar el de `purchase`: cada subsistema opcional lee del
+ * entorno lo que necesita, igual que ya hace `PURCHASE_HTTP_ENABLED`.
+ */
+const readPlayerInventoryConfig = (env: RawEnv): PlayerInventoryConfig | null => {
+  const baseUrl = readString(env, 'PLAYER_INVENTORY_BASE_URL', '')
+  const secret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
+
+  if (baseUrl === '' || secret === '') {
+    return null
+  }
+
+  return {
+    baseUrl,
+    secret,
+    timeoutMs: readInteger(env, 'PLAYER_INVENTORY_TIMEOUT_MS', 2_000, 1, 60_000),
+  }
 }
 
 /**
@@ -296,6 +336,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
         env['CATALOG_LIFECYCLE_QUEUE_URL'] === ''
           ? null
           : env['CATALOG_LIFECYCLE_QUEUE_URL'],
+      playerInventory: readPlayerInventoryConfig(env),
     }
   }
 
