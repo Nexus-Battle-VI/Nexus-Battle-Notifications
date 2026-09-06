@@ -1,6 +1,7 @@
 import { MongoClient } from 'mongodb'
 import type { AppConfig } from '../config/env.js'
 import { QueueDriver } from '../config/env.js'
+import { RetryPolicy } from '../../domain/policies/RetryPolicy.js'
 import { SystemClock } from '../../adapters/clock/SystemClock.js'
 import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIdempotencyStore.js'
 import { InMemoryMessageQueue } from '../../adapters/messaging/InMemoryMessageQueue.js'
@@ -104,19 +105,29 @@ export const buildCatalogNotificationsApplication = async (
   } else {
     // Fail closed: sin PLAYER_INVENTORY_BASE_URL/INTERNAL_SERVICE_AUTH_SECRET
     // no se inventa un destinatario ni se cae a audiencia GLOBAL. Suspension y
-    // reactivacion quedaran en RecipientsUnresolved hasta que se configure.
+    // reactivacion seguiran la misma ruta reintentable/dead-letter que
+    // cualquier otro fallo de resolucion, no un ACK permanente.
     productOwnersResolver = new UnavailableProductOwnersResolver()
     logger.warn('product_owners_resolver_not_configured', {
       reason:
-        'Sin PLAYER_INVENTORY_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET: suspension/reactivacion quedaran como recipients-unresolved.',
+        'Sin PLAYER_INVENTORY_BASE_URL o INTERNAL_SERVICE_AUTH_SECRET: suspension/reactivacion se reintentaran hasta agotar intentos.',
     })
   }
+
+  // Misma politica que ya usa HandleCatalogProductCreated (correo): no se
+  // duplican maxAttempts/retryBaseDelayMs/retryMaxDelayMs con nombres nuevos.
+  const retryPolicy = RetryPolicy.create({
+    maxAttempts: config.maxAttempts,
+    baseDelayMs: config.retryBaseDelayMs,
+    maxDelayMs: config.retryMaxDelayMs,
+  })
 
   const lifecycleUseCase = new HandleCatalogLifecycleEvent({
     notifications,
     idempotencyStore,
     productOwnersResolver,
     clock,
+    retryPolicy,
     idempotencyTtlMs: config.idempotencyTtlMs,
   })
 

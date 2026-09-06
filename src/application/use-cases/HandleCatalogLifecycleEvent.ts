@@ -1,5 +1,6 @@
 import { CatalogNotification } from '../../domain/entities/CatalogNotification.js'
 import { CatalogChangeType } from '../../domain/entities/CatalogChangeType.js'
+import type { RetryPolicy } from '../../domain/policies/RetryPolicy.js'
 import type { ClockPort } from '../ports/ClockPort.js'
 import type { IdempotencyStorePort } from '../ports/IdempotencyStorePort.js'
 import type { CatalogNotificationRepositoryPort } from '../ports/CatalogNotificationRepositoryPort.js'
@@ -13,13 +14,15 @@ export const LifecycleEventOutcome = {
   Processed: 'processed',
   Duplicated: 'duplicated',
   /**
-   * El evento es válido pero requiere resolver propietarios y ese contrato no
-   * existe todavía (ver ProductOwnersResolverPort). Se confirma como procesado
-   * -no se reintenta ni se manda a la cola de fallidos-: no es un error
-   * transitorio del mensaje, es una brecha de contrato que un reintento no
-   * resuelve. Queda registrado para trazabilidad y para un backfill futuro.
+   * Resolver propietarios falló de forma transitoria (timeout, red, 5xx,
+   * resolver sin configurar) o el mensaje simplemente no es válido. El
+   * mensaje NO se confirma como procesado: se libera la reserva de
+   * idempotencia y el consumidor debe reencolarlo mientras queden intentos
+   * (ver RetryPolicy, la misma que ya usa HandleCatalogProductCreated).
    */
-  RecipientsUnresolved: 'recipients-unresolved',
+  Retry: 'retry',
+  /** Intentos agotados: se confirma la idempotencia (mismo criterio que HandleCatalogProductCreated) y el mensaje sale del flujo hacia la cola de fallidos. */
+  DeadLetter: 'dead-letter',
 } as const
 
 export type LifecycleEventOutcome =
@@ -29,6 +32,8 @@ export interface HandleCatalogLifecycleEventResult {
   readonly outcome: LifecycleEventOutcome
   readonly eventId: string
   readonly notificationsCreated: number
+  readonly attempt: number
+  readonly retryDelayMs: number | null
   readonly reason: string | null
 }
 
@@ -37,6 +42,7 @@ export interface HandleCatalogLifecycleEventDependencies {
   readonly idempotencyStore: IdempotencyStorePort
   readonly productOwnersResolver: ProductOwnersResolverPort
   readonly clock: ClockPort
+  readonly retryPolicy: RetryPolicy
   readonly idempotencyTtlMs: number
 }
 
@@ -64,7 +70,13 @@ const describe = (eventType: CatalogLifecycleEventType, productName: string): st
   }
 }
 
-/** Suspensión y reactivación se dirigen a quienes poseen el producto; el resto no depende de posesión (ver CatalogNotification.NotificationAudience). */
+/**
+ * Suspensión y reactivación se dirigen a quienes poseen el producto (llaman a
+ * Player-Inventory vía `ProductOwnersResolverPort`, ver Notifications#21); el
+ * resto no depende de posesión (ver CatalogNotification.NotificationAudience)
+ * y por tanto no tiene ningún fallo transitorio que reintentar aquí: no
+ * llaman a ningún servicio externo.
+ */
 const requiresOwnerResolution = (eventType: CatalogLifecycleEventType): boolean =>
   eventType === CatalogLifecycleEventType.Suspended ||
   eventType === CatalogLifecycleEventType.Reactivated
@@ -76,7 +88,11 @@ export class HandleCatalogLifecycleEvent {
     this.deps = deps
   }
 
-  async execute(event: CatalogLifecycleEvent): Promise<HandleCatalogLifecycleEventResult> {
+  async execute(params: {
+    event: CatalogLifecycleEvent
+    deliveryAttempt: number
+  }): Promise<HandleCatalogLifecycleEventResult> {
+    const { event, deliveryAttempt } = params
     const idempotencyKey = `catalog:lifecycle:${event.eventType}:${event.eventId}`
     const reserved = await this.deps.idempotencyStore.reserve(
       idempotencyKey,
@@ -88,6 +104,8 @@ export class HandleCatalogLifecycleEvent {
         outcome: LifecycleEventOutcome.Duplicated,
         eventId: event.eventId,
         notificationsCreated: 0,
+        attempt: deliveryAttempt,
+        retryDelayMs: null,
         reason: `El evento "${event.eventId}" ya fue procesado previamente.`,
       }
     }
@@ -116,6 +134,8 @@ export class HandleCatalogLifecycleEvent {
         outcome: LifecycleEventOutcome.Processed,
         eventId: event.eventId,
         notificationsCreated: 1,
+        attempt: deliveryAttempt,
+        retryDelayMs: null,
         reason: null,
       }
     }
@@ -123,12 +143,39 @@ export class HandleCatalogLifecycleEvent {
     const resolution = await this.deps.productOwnersResolver.resolveOwners(event.data.productId)
 
     if (!resolution.available) {
+      // Fallo transitorio (timeout, red, 5xx) o resolver sin configurar: NO es
+      // "el producto no tiene propietarios". No se confirma la idempotencia:
+      // se libera para que la próxima entrega del mismo eventId pueda
+      // procesarse de verdad, en vez de quedar bloqueada por una reserva que
+      // nunca se completó.
+      const willRetry = this.deps.retryPolicy.shouldRetry(deliveryAttempt, true)
+
+      if (willRetry) {
+        await this.deps.idempotencyStore.release(idempotencyKey)
+
+        return {
+          outcome: LifecycleEventOutcome.Retry,
+          eventId: event.eventId,
+          notificationsCreated: 0,
+          attempt: deliveryAttempt,
+          retryDelayMs: this.deps.retryPolicy.delayForAttempt(deliveryAttempt),
+          reason: resolution.reason,
+        }
+      }
+
+      // Intentos agotados: mismo criterio que HandleCatalogProductCreated -se
+      // confirma para que una redelivery de este mismo eventId no reprocese
+      // el mismo fallo indefinidamente-. Un replay manual desde la cola de
+      // fallidos requiere limpiar la reserva de idempotencia explícitamente,
+      // igual que ya exige el flujo de correo.
       await this.deps.idempotencyStore.confirm(idempotencyKey)
 
       return {
-        outcome: LifecycleEventOutcome.RecipientsUnresolved,
+        outcome: LifecycleEventOutcome.DeadLetter,
         eventId: event.eventId,
         notificationsCreated: 0,
+        attempt: deliveryAttempt,
+        retryDelayMs: null,
         reason: resolution.reason,
       }
     }
@@ -155,6 +202,8 @@ export class HandleCatalogLifecycleEvent {
       outcome: LifecycleEventOutcome.Processed,
       eventId: event.eventId,
       notificationsCreated: resolution.playerIds.length,
+      attempt: deliveryAttempt,
+      retryDelayMs: null,
       reason: null,
     }
   }

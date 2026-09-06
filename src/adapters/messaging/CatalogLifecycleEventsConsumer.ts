@@ -18,16 +18,19 @@ export interface LifecycleBatchSummary {
   readonly received: number
   readonly processed: number
   readonly duplicated: number
-  readonly recipientsUnresolved: number
+  readonly requeued: number
   readonly deadLettered: number
 }
 
 /**
- * No hay política de reintento aquí a diferencia de `CatalogProductEventsConsumer`:
- * un evento de ciclo de vida válido nunca falla de forma transitoria en este
- * caso de uso (no llama proveedores externos), así que solo hay dos rutas:
- * procesado (o `RecipientsUnresolved`, que también se confirma) o
- * `dead-lettered` cuando el sobre en sí es inválido.
+ * Suspensión y reactivación llaman a Player-Inventory para resolver
+ * propietarios (`ProductOwnersResolverPort`, ver Notifications#21): un
+ * timeout, un error de red o un `5xx` son fallos TRANSITORIOS del mensaje,
+ * igual que un proveedor de correo caído en `CatalogProductEventsConsumer`.
+ * Por eso este consumidor sigue exactamente el mismo patrón de
+ * ack/requeue/dead-letter que aquel -antes de este cambio, todo resultado
+ * distinto de un sobre inválido se confirmaba sin más, lo que perdía la
+ * notificación en silencio ante cualquier fallo temporal de Player-Inventory-.
  */
 export class CatalogLifecycleEventsConsumer {
   private readonly options: CatalogLifecycleEventsConsumerOptions
@@ -41,7 +44,7 @@ export class CatalogLifecycleEventsConsumer {
 
     let processed = 0
     let duplicated = 0
-    let recipientsUnresolved = 0
+    let requeued = 0
     let deadLettered = 0
 
     for (const message of messages) {
@@ -54,8 +57,8 @@ export class CatalogLifecycleEventsConsumer {
         case 'duplicated':
           duplicated += 1
           break
-        case 'recipients-unresolved':
-          recipientsUnresolved += 1
+        case 'requeued':
+          requeued += 1
           break
         case 'dead-lettered':
           deadLettered += 1
@@ -63,12 +66,12 @@ export class CatalogLifecycleEventsConsumer {
       }
     }
 
-    return { received: messages.length, processed, duplicated, recipientsUnresolved, deadLettered }
+    return { received: messages.length, processed, duplicated, requeued, deadLettered }
   }
 
   private async processMessage(
     message: QueueMessage,
-  ): Promise<'processed' | 'duplicated' | 'recipients-unresolved' | 'dead-lettered'> {
+  ): Promise<'processed' | 'duplicated' | 'requeued' | 'dead-lettered'> {
     let event
 
     try {
@@ -89,11 +92,16 @@ export class CatalogLifecycleEventsConsumer {
       return 'dead-lettered'
     }
 
-    const result = await this.options.useCase.execute(event)
-    await this.options.queue.acknowledge(message.receiptHandle)
+    // El número de intento de entrega proviene del contador de entregas de la
+    // cola, igual que en CatalogProductEventsConsumer.
+    const result = await this.options.useCase.execute({
+      event,
+      deliveryAttempt: message.receivedCount,
+    })
 
     switch (result.outcome) {
       case LifecycleEventOutcome.Processed:
+        await this.options.queue.acknowledge(message.receiptHandle)
         this.options.logger.info('catalog_lifecycle_event_processed', {
           messageId: message.id,
           eventId: result.eventId,
@@ -102,19 +110,36 @@ export class CatalogLifecycleEventsConsumer {
         return 'processed'
 
       case LifecycleEventOutcome.Duplicated:
+        await this.options.queue.acknowledge(message.receiptHandle)
         this.options.logger.info('catalog_lifecycle_event_duplicated', {
           messageId: message.id,
           eventId: result.eventId,
         })
         return 'duplicated'
 
-      case LifecycleEventOutcome.RecipientsUnresolved:
-        this.options.logger.warn('catalog_lifecycle_event_recipients_unresolved', {
+      case LifecycleEventOutcome.Retry:
+        await this.options.queue.requeue(message.receiptHandle, result.retryDelayMs ?? 0)
+        this.options.logger.warn('catalog_lifecycle_event_requeued', {
           messageId: message.id,
           eventId: result.eventId,
+          attempt: result.attempt,
+          retryDelayMs: result.retryDelayMs,
           reason: result.reason,
         })
-        return 'recipients-unresolved'
+        return 'requeued'
+
+      case LifecycleEventOutcome.DeadLetter:
+        await this.options.queue.deadLetter(
+          message.receiptHandle,
+          result.reason ?? 'Agotados los reintentos al resolver destinatarios.',
+        )
+        this.options.logger.error('catalog_lifecycle_event_dead_lettered', {
+          messageId: message.id,
+          eventId: result.eventId,
+          attempt: result.attempt,
+          reason: result.reason,
+        })
+        return 'dead-lettered'
     }
   }
 }

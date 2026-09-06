@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals'
 import { InMemoryIdempotencyStore } from '../../src/adapters/idempotency/InMemoryIdempotencyStore.js'
 import { InMemoryCatalogNotificationRepository } from '../../src/adapters/persistence/InMemoryCatalogNotificationRepository.js'
 import { SystemClock } from '../../src/adapters/clock/SystemClock.js'
+import { RetryPolicy } from '../../src/domain/policies/RetryPolicy.js'
 import { PlayerInventoryProductOwnersResolver } from '../../src/adapters/identity/PlayerInventoryProductOwnersResolver.js'
 import {
   HandleCatalogLifecycleEvent,
@@ -27,6 +28,20 @@ const suspendedEvent = (eventId: string): CatalogLifecycleEvent => ({
   data: { productId: PRODUCT_ID, name: 'Mago Hielo', type: 'HEROE', lifecycleStatus: 'SUSPENDED' },
 })
 
+const buildUseCase = (
+  resolver: PlayerInventoryProductOwnersResolver,
+  notifications = new InMemoryCatalogNotificationRepository(),
+  idempotencyStore = new InMemoryIdempotencyStore(() => Date.now()),
+): HandleCatalogLifecycleEvent =>
+  new HandleCatalogLifecycleEvent({
+    notifications,
+    idempotencyStore,
+    productOwnersResolver: resolver,
+    clock: new SystemClock(),
+    retryPolicy: RetryPolicy.create({ maxAttempts: 3, baseDelayMs: 10, maxDelayMs: 100 }),
+    idempotencyTtlMs: 60_000,
+  })
+
 /**
  * Extremo a extremo del tramo nuevo de HU-38: evento de Catalog ->
  * HandleCatalogLifecycleEvent -> PlayerInventoryProductOwnersResolver (HTTP
@@ -49,15 +64,12 @@ describe('HandleCatalogLifecycleEvent + PlayerInventoryProductOwnersResolver', (
       fetch: fetchImpl,
     })
     const notifications = new InMemoryCatalogNotificationRepository()
-    const useCase = new HandleCatalogLifecycleEvent({
-      notifications,
-      idempotencyStore: new InMemoryIdempotencyStore(() => Date.now()),
-      productOwnersResolver: resolver,
-      clock: new SystemClock(),
-      idempotencyTtlMs: 60_000,
-    })
+    const useCase = buildUseCase(resolver, notifications)
 
-    const result = await useCase.execute(suspendedEvent('6a1f9c3e-2b8a-4e7a-9a0f-7d3c9b2e1a44'))
+    const result = await useCase.execute({
+      event: suspendedEvent('6a1f9c3e-2b8a-4e7a-9a0f-7d3c9b2e1a44'),
+      deliveryAttempt: 1,
+    })
 
     expect(result.outcome).toBe(LifecycleEventOutcome.Processed)
     expect(result.notificationsCreated).toBe(1)
@@ -72,7 +84,7 @@ describe('HandleCatalogLifecycleEvent + PlayerInventoryProductOwnersResolver', (
     expect(forNonOwner).toHaveLength(0)
   })
 
-  it('un fallo de Player-Inventory (5xx) no crea notificaciones y queda como recipients-unresolved, nunca como GLOBAL', async () => {
+  it('un fallo de Player-Inventory (5xx) no crea notificaciones, se reencola (no se confirma) y nunca cae a GLOBAL', async () => {
     const fetchImpl = jest.fn<typeof fetch>(() =>
       Promise.resolve(new Response(null, { status: 503 })),
     )
@@ -83,22 +95,66 @@ describe('HandleCatalogLifecycleEvent + PlayerInventoryProductOwnersResolver', (
       fetch: fetchImpl,
     })
     const notifications = new InMemoryCatalogNotificationRepository()
-    const useCase = new HandleCatalogLifecycleEvent({
-      notifications,
-      idempotencyStore: new InMemoryIdempotencyStore(() => Date.now()),
-      productOwnersResolver: resolver,
-      clock: new SystemClock(),
-      idempotencyTtlMs: 60_000,
+    const idempotencyStore = new InMemoryIdempotencyStore(() => Date.now())
+    const useCase = buildUseCase(resolver, notifications, idempotencyStore)
+
+    const result = await useCase.execute({
+      event: suspendedEvent('22222222-2222-4222-8222-222222222222'),
+      deliveryAttempt: 1,
     })
 
-    const result = await useCase.execute(suspendedEvent('22222222-2222-4222-8222-222222222222'))
-
-    expect(result.outcome).toBe(LifecycleEventOutcome.RecipientsUnresolved)
+    expect(result.outcome).toBe(LifecycleEventOutcome.Retry)
     expect(result.notificationsCreated).toBe(0)
     expect(await notifications.findAllGlobal()).toEqual([])
+    // Liberada, no confirmada: el mismo eventId puede reservarse de nuevo.
+    expect(
+      await idempotencyStore.reserve(
+        'catalog:lifecycle:catalog.product.suspended:22222222-2222-4222-8222-222222222222',
+        60_000,
+      ),
+    ).toBe(true)
   })
 
-  it('idempotencia: procesar el mismo eventId dos veces contra Player-Inventory real no duplica la notificacion', async () => {
+  it('11/12 (integracion): Player-Inventory falla con 500 en el primer intento y se recupera en el segundo -mismo eventId, la notificacion no se pierde', async () => {
+    let attempt = 0
+    const fetchImpl = jest.fn<typeof fetch>(() => {
+      attempt += 1
+      if (attempt === 1) {
+        return Promise.resolve(new Response(null, { status: 500 }))
+      }
+      return Promise.resolve(
+        jsonResponse({ productId: PRODUCT_ID, owners: [{ playerId: 'jugador-a' }] }),
+      )
+    })
+    const resolver = new PlayerInventoryProductOwnersResolver({
+      baseUrl: BASE_URL,
+      secret: SECRET,
+      timeoutMs: 1_000,
+      fetch: fetchImpl,
+    })
+    const notifications = new InMemoryCatalogNotificationRepository()
+    const idempotencyStore = new InMemoryIdempotencyStore(() => Date.now())
+    const useCase = buildUseCase(resolver, notifications, idempotencyStore)
+    const event = suspendedEvent('44444444-4444-4444-8444-444444444444')
+
+    const first = await useCase.execute({ event, deliveryAttempt: 1 })
+    expect(first.outcome).toBe(LifecycleEventOutcome.Retry)
+    expect(first.notificationsCreated).toBe(0)
+    expect(await notifications.findAllGlobal()).toEqual([])
+    expect(await notifications.findPendingForPlayer('jugador-a')).toEqual([])
+
+    // Segunda entrega del MISMO eventId (simulando el reencolado de la cola).
+    const second = await useCase.execute({ event, deliveryAttempt: 2 })
+
+    expect(second.outcome).toBe(LifecycleEventOutcome.Processed)
+    expect(second.notificationsCreated).toBe(1)
+    const pending = await notifications.findPendingForPlayer('jugador-a')
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.description).toBe('Mago Hielo fue suspendido temporalmente')
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('idempotencia: procesar el mismo eventId dos veces contra Player-Inventory real (exito) no duplica la notificacion', async () => {
     const fetchImpl = jest.fn<typeof fetch>(() =>
       Promise.resolve(
         jsonResponse({ productId: PRODUCT_ID, owners: [{ playerId: 'jugador-dueno' }] }),
@@ -111,18 +167,11 @@ describe('HandleCatalogLifecycleEvent + PlayerInventoryProductOwnersResolver', (
       fetch: fetchImpl,
     })
     const notifications = new InMemoryCatalogNotificationRepository()
-    const idempotencyStore = new InMemoryIdempotencyStore(() => Date.now())
-    const useCase = new HandleCatalogLifecycleEvent({
-      notifications,
-      idempotencyStore,
-      productOwnersResolver: resolver,
-      clock: new SystemClock(),
-      idempotencyTtlMs: 60_000,
-    })
+    const useCase = buildUseCase(resolver, notifications)
     const event = suspendedEvent('33333333-3333-4333-8333-333333333333')
 
-    const first = await useCase.execute(event)
-    const second = await useCase.execute(event)
+    const first = await useCase.execute({ event, deliveryAttempt: 1 })
+    const second = await useCase.execute({ event, deliveryAttempt: 2 })
 
     expect(first.outcome).toBe(LifecycleEventOutcome.Processed)
     expect(second.outcome).toBe(LifecycleEventOutcome.Duplicated)
