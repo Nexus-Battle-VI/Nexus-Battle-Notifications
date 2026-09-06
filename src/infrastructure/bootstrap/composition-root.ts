@@ -94,14 +94,45 @@ export const buildApplication = (config: AppConfig): Application => {
     queue = inMemoryQueue
   }
 
-  const catalogQueue: MessageQueuePort =
-    config.queueDriver === QueueDriver.Sqs && config.catalogQueueUrl
-      ? new SqsMessageQueue({
-          client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
-          queueUrl: config.catalogQueueUrl,
-          deadLetterQueueUrl: config.deadLetterQueueUrl,
-        })
-      : queue
+  /**
+   * Cola dedicada de `catalog.product.created` (ADR-017, Infrastructure#93).
+   *
+   * Independiente de `queueDriver`/`queue`: antes, esta cola solo se activaba
+   * cuando la cola GENERAL tambien era SQS, y si no, caia por defecto a
+   * compartir la instancia de `queue` -que en modo SQS general habria sido la
+   * cola equivocada, y en modo memoria general mezclaba el trafico de dos
+   * consumidores en la misma cola en memoria-. `catalogQueueDriver` decide
+   * esto por su cuenta: activar SQS para Catalog no exige la cola general, y
+   * viceversa (ver el comentario de `catalogQueueDriver` en env.ts).
+   *
+   * Sin `deadLetterQueueUrl`, a proposito: no se reutiliza la DLQ general
+   * -pertenece a otro dominio de mensajes y mezclarla violaria la DLQ propia
+   * que Infrastructure#93 provisiona para esta cola-. Un mensaje
+   * irreprocesable sigue entonces la redrive policy de la propia cola SQS
+   * dedicada (`SqsMessageQueue.deadLetter` pone visibilidad a 0 hasta que
+   * `ApproximateReceiveCount` alcanza el maximo), tal como exige ADR-017
+   * seccion 5. Una DLQ dedicada a nivel de aplicacion (`CATALOG_DEAD_LETTER_QUEUE_URL`)
+   * no existe todavia porque no hay un contrato aprobado para ella.
+   */
+  let catalogQueue: MessageQueuePort
+
+  if (config.catalogQueueDriver === QueueDriver.Sqs) {
+    const catalogSettings = resolveSqsSettings({
+      region: config.awsRegion,
+      queueUrl: config.catalogQueueUrl,
+    })
+    logger.info('catalog_sqs_driver_initialized', {
+      queueName: catalogSettings.queueName,
+      region: catalogSettings.region,
+    })
+
+    catalogQueue = new SqsMessageQueue({
+      client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
+      queueUrl: config.catalogQueueUrl ?? '',
+    })
+  } else {
+    catalogQueue = new InMemoryMessageQueue(nowMs)
+  }
 
   const idempotencyStore = new InMemoryIdempotencyStore(nowMs)
   const emailSender = buildEmailSender(config)

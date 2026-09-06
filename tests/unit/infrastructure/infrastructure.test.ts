@@ -24,6 +24,8 @@ describe('loadConfig', () => {
       smtpPass: null,
       queueDriver: 'memory',
       queueUrl: null,
+      catalogQueueDriver: 'memory',
+      catalogQueueUrl: null,
       awsRegion: null,
       batchSize: 10,
       maxAttempts: 5,
@@ -90,6 +92,96 @@ describe('loadConfig', () => {
 
     expect(config.queueDriver).toBe('sqs')
     expect(config.awsRegion).toBe('us-east-1')
+  })
+
+  describe('CATALOG_QUEUE_DRIVER (desacoplado de QUEUE_DRIVER, Infrastructure#93)', () => {
+    it('caso A: ambos en memoria, sin exigir ninguna URL', () => {
+      const config = loadConfig({ QUEUE_DRIVER: 'memory', CATALOG_QUEUE_DRIVER: 'memory' })
+
+      expect(config.queueDriver).toBe('memory')
+      expect(config.catalogQueueDriver).toBe('memory')
+    })
+
+    it('caso B: cola general en memoria y Catalog por SQS, sin exigir QUEUE_URL general', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'memory',
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.queueDriver).toBe('memory')
+      expect(config.queueUrl).toBeNull()
+      expect(config.catalogQueueDriver).toBe('sqs')
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
+
+    it('caso C: Catalog por SQS sin CATALOG_QUEUE_URL falla', () => {
+      expect(() => loadConfig({ CATALOG_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' })).toThrow(
+        /CATALOG_QUEUE_URL \(o CATALOG_EVENTS_QUEUE_URL\) es obligatorio/,
+      )
+    })
+
+    it('acepta CATALOG_EVENTS_QUEUE_URL como alias de CATALOG_QUEUE_URL', () => {
+      const config = loadConfig({
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_EVENTS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
+
+    it('caso D: Catalog por SQS sin AWS_REGION falla', () => {
+      expect(() =>
+        loadConfig({
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        }),
+      ).toThrow(/AWS_REGION es obligatorio cuando CATALOG_QUEUE_DRIVER es "sqs"/)
+    })
+
+    it('caso E: QUEUE_DRIVER=sqs sin QUEUE_URL general sigue fallando igual que antes, sin relacion con Catalog', () => {
+      expect(() =>
+        loadConfig({
+          QUEUE_DRIVER: 'sqs',
+          AWS_REGION: 'us-east-1',
+          CATALOG_QUEUE_DRIVER: 'memory',
+        }),
+      ).toThrow(/QUEUE_URL es obligatorio cuando QUEUE_DRIVER es "sqs"/)
+    })
+
+    it('queue general SQS + Catalog en memoria: cada driver se valida por su cuenta', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'sqs',
+        QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+        AWS_REGION: 'us-east-1',
+        CATALOG_QUEUE_DRIVER: 'memory',
+      })
+
+      expect(config.queueDriver).toBe('sqs')
+      expect(config.catalogQueueDriver).toBe('memory')
+      expect(config.catalogQueueUrl).toBeNull()
+    })
+
+    it('ambas colas por SQS, con URLs independientes', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'sqs',
+        QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.queueUrl).toBe('https://sqs.us-east-1.amazonaws.com/1/notificaciones')
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
   })
 
   it('activa la ingesta y lee su puerto y secreto', () => {

@@ -232,12 +232,18 @@ Notifications → Player-Inventory → notificación persistida).
 
 ### Brecha conocida: transporte de los cuatro eventos de ciclo de vida
 
-Infrastructure solo provisiona (como propuesta, ADR-017, no desplegada) una
-cola para `catalog.product.created`. Los otros cuatro eventos de esta tabla no
-tienen canal ni cola definidos todavía. `CatalogLifecycleEventsConsumer` existe
-y se ejercita en memoria (desarrollo y pruebas); en un despliegue real, sin
-`CATALOG_LIFECYCLE_QUEUE_URL`, cae a una cola en memoria local sin transporte,
-lo cual se registra explícitamente en el arranque (`catalog_lifecycle_queue_not_configured`).
+ADR-017 (Infrastructure) está `Accepted` y su cola dedicada para
+`catalog.product.created` ya está **provisionada como código Terraform**
+(Infrastructure#93); todavía no se aplicó contra una cuenta real
+(`terraform apply` pendiente). El transporte de `catalog.product.created` se
+activa con `CATALOG_QUEUE_DRIVER=sqs` -independiente de `QUEUE_DRIVER`, ver
+`.env.example`-, sin exigir la cola general de ADR-006.
+
+Los otros cuatro eventos de ciclo de vida no tienen canal ni cola definidos
+todavía. `CatalogLifecycleEventsConsumer` existe y se ejercita en memoria
+(desarrollo y pruebas); en un despliegue real, sin `CATALOG_LIFECYCLE_QUEUE_URL`,
+cae a una cola en memoria local sin transporte, lo cual se registra
+explícitamente en el arranque (`catalog_lifecycle_queue_not_configured`).
 
 ### Consolidación
 

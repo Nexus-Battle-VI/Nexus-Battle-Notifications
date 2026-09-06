@@ -80,6 +80,18 @@ export interface AppConfig {
   readonly queueDriver: QueueDriver
   readonly queueUrl: string | null
   readonly deadLetterQueueUrl: string | null
+  /**
+   * Transporte de `catalog.product.created`, independiente de `queueDriver`.
+   *
+   * ADR-017 (Infrastructure) aprobo SQS unicamente para este evento: no
+   * aprobo migrar la cola general (`account.registered`/`verified`, compras)
+   * a SQS. Antes de esta variable, activar SQS para Catalog exigia tambien
+   * `queueDriver === 'sqs'`, que a su vez exige `QUEUE_URL` de la cola
+   * general -sin ella `loadConfig` rechazaba el arranque completo del
+   * worker-. Separar el interruptor deja que Infrastructure#93 (cola
+   * dedicada) se active sola.
+   */
+  readonly catalogQueueDriver: QueueDriver
   readonly catalogQueueUrl: string | null
   readonly awsRegion: string | null
   readonly pollIntervalMs: number
@@ -223,6 +235,21 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const catalogQueueUrl = env['CATALOG_QUEUE_URL'] ?? env['CATALOG_EVENTS_QUEUE_URL'] ?? null
   const awsRegion = env['AWS_REGION'] ?? null
 
+  /**
+   * `CATALOG_QUEUE_DRIVER` es EXPLICITO y no se infiere de la presencia de
+   * `CATALOG_QUEUE_URL`: este repositorio no activa adaptadores por la
+   * presencia accidental de una variable (mismo criterio que
+   * `CATALOG_NOTIFICATIONS_HTTP_ENABLED`, que tampoco se infiere de
+   * `MONGO_URL`). `memory` por defecto preserva el comportamiento local
+   * existente sin exigir ningun cambio a quien no use Catalog por SQS.
+   */
+  const catalogQueueDriver = readEnum(
+    env,
+    'CATALOG_QUEUE_DRIVER',
+    [QueueDriver.Memory, QueueDriver.Sqs],
+    QueueDriver.Memory,
+  )
+
   if (emailDriver === EmailDriver.Ses && (awsRegion === null || awsRegion === '')) {
     throw new ConfigurationError('AWS_REGION es obligatorio cuando EMAIL_DRIVER es "ses".')
   }
@@ -234,6 +261,20 @@ export const loadConfig = (env: RawEnv): AppConfig => {
 
     if (awsRegion === null || awsRegion === '') {
       throw new ConfigurationError('AWS_REGION es obligatorio cuando QUEUE_DRIVER es "sqs".')
+    }
+  }
+
+  if (catalogQueueDriver === QueueDriver.Sqs) {
+    if (catalogQueueUrl === null || catalogQueueUrl === '') {
+      throw new ConfigurationError(
+        'CATALOG_QUEUE_URL (o CATALOG_EVENTS_QUEUE_URL) es obligatorio cuando CATALOG_QUEUE_DRIVER es "sqs".',
+      )
+    }
+
+    if (awsRegion === null || awsRegion === '') {
+      throw new ConfigurationError(
+        'AWS_REGION es obligatorio cuando CATALOG_QUEUE_DRIVER es "sqs".',
+      )
     }
   }
 
@@ -364,6 +405,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     queueDriver,
     queueUrl: queueUrl === '' ? null : queueUrl,
     deadLetterQueueUrl: deadLetterQueueUrl === '' ? null : deadLetterQueueUrl,
+    catalogQueueDriver,
     catalogQueueUrl: catalogQueueUrl === '' ? null : catalogQueueUrl,
     awsRegion: awsRegion === '' ? null : awsRegion,
     pollIntervalMs: readInteger(env, 'POLL_INTERVAL_MS', 1_000, 10, 60_000),

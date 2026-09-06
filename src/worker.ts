@@ -154,6 +154,7 @@ process.on('SIGINT', () => {
 app.logger.info('worker_started', {
   emailDriver: config.emailDriver,
   queueDriver: config.queueDriver,
+  catalogQueueDriver: config.catalogQueueDriver,
   ingestEnabled: config.ingestEnabled,
   batchSize: config.batchSize,
   pollIntervalMs: config.pollIntervalMs,
@@ -174,6 +175,21 @@ while (state.running) {
       state.catalogNotificationsReady = false
     }
   }
+  /**
+   * DEUDA TECNICA CONOCIDA, sin resolver en esta corrección: los tres
+   * consumidores (general, catalog.product.created, lifecycle) comparten un
+   * unico try/catch y un unico `state.lastPollSucceeded`. Antes de separar
+   * `queueDriver` de `catalogQueueDriver`, esto ya era asi -no lo introduce
+   * este cambio-, pero ahora es mas consecuente: un fallo transitorio de la
+   * cola GENERAL (memoria o SQS) impide que `catalogCreatedConsumer` corra
+   * siquiera en esta iteracion -el `await` es secuencial dentro del mismo
+   * bloque- y marca el readiness `queue` como no-listo aunque la cola dedicada
+   * de Catalog (ADR-017) este perfectamente sana, y viceversa. Separar esto en
+   * `generalQueueReady`/`catalogQueueReady`/`lifecycleQueueReady` con un
+   * try/catch por consumidor es un cambio razonable, pero amplia el alcance de
+   * esta corrección -que es desacoplar el TRANSPORTE, no la observabilidad-;
+   * queda como trabajo de seguimiento, no oculto.
+   */
   try {
     const summary = await app.consumer.processBatch()
     const catalogSummary = await catalogCreatedConsumer.processBatch()
