@@ -4,6 +4,11 @@ import { createHealthServer } from './infrastructure/http/health-server.js'
 import { createIngestServer } from './infrastructure/http/ingest-server.js'
 import { buildPurchaseApplication } from './infrastructure/bootstrap/purchase-application.js'
 import { createPurchaseServer } from './infrastructure/http/purchase-server.js'
+import { buildCatalogNotificationsApplication } from './infrastructure/bootstrap/catalog-notifications-application.js'
+import { HandleCatalogProductCreatedInApp } from './application/use-cases/HandleCatalogProductCreatedInApp.js'
+import { HandleCatalogProductCreatedNotifications } from './application/use-cases/HandleCatalogProductCreatedNotifications.js'
+import { CatalogProductEventsConsumer } from './adapters/messaging/CatalogProductEventsConsumer.js'
+import { SystemClock } from './adapters/clock/SystemClock.js'
 
 const config = loadConfig(process.env)
 const app = buildApplication(config)
@@ -19,6 +24,36 @@ const purchaseServer =
     : null
 
 /**
+ * HU-38: notificaciones in-app + banner. Subsistema opcional, igual que
+ * ingesta y compras (`CATALOG_NOTIFICATIONS_HTTP_ENABLED`).
+ *
+ * Cuando esta activo, `catalog.product.created` gana una SEGUNDA reaccion
+ * -in-app, ademas del correo heredado de HU-33.10- compuesta sobre el MISMO
+ * consumidor (`app.catalogQueue`/`app.catalogUseCase`): dos consumidores
+ * separados sondeando la misma cola competirian por el mismo mensaje en vez
+ * de recibirlo los dos. Ver HandleCatalogProductCreatedNotifications.ts.
+ */
+const catalogNotificationsApp = await buildCatalogNotificationsApplication(config, app.logger)
+
+const catalogCreatedConsumer =
+  catalogNotificationsApp === null
+    ? app.catalogEventsConsumer
+    : new CatalogProductEventsConsumer({
+        queue: app.catalogQueue,
+        logger: app.logger,
+        batchSize: config.batchSize,
+        useCase: new HandleCatalogProductCreatedNotifications({
+          emailUseCase: app.catalogUseCase,
+          inAppUseCase: new HandleCatalogProductCreatedInApp({
+            notifications: catalogNotificationsApp.notifications,
+            idempotencyStore: catalogNotificationsApp.idempotencyStore,
+            clock: new SystemClock(),
+            idempotencyTtlMs: config.idempotencyTtlMs,
+          }),
+        }),
+      })
+
+/**
  * Estado observable del worker. Se agrupa en un objeto porque las sondas de
  * salud y los manejadores de senales lo consultan y lo modifican desde
  * contextos distintos al del bucle principal.
@@ -27,6 +62,7 @@ const state = {
   running: true,
   lastPollSucceeded: true,
   purchaseReady: true,
+  catalogNotificationsReady: true,
 }
 
 const healthServer = createHealthServer({
@@ -43,6 +79,9 @@ const healthServer = createHealthServer({
     ...(purchaseApp === null
       ? []
       : [{ name: 'purchase-inbox', check: (): boolean => state.purchaseReady }]),
+    ...(catalogNotificationsApp === null
+      ? []
+      : [{ name: 'catalog-notifications', check: (): boolean => state.catalogNotificationsReady }]),
   ],
   ...(config.nodeEnv === 'development'
     ? {
@@ -94,6 +133,11 @@ const shutdown = (signal: string): void => {
       app.logger.error('purchase_inbox_close_failed')
     })
   })
+  catalogNotificationsApp?.server.close(() => {
+    void catalogNotificationsApp.close().catch(() => {
+      app.logger.error('catalog_notifications_close_failed')
+    })
+  })
   healthServer.close(() => {
     app.logger.info('worker_stopped')
   })
@@ -123,9 +167,17 @@ while (state.running) {
       state.purchaseReady = false
     }
   }
+  if (catalogNotificationsApp !== null) {
+    try {
+      state.catalogNotificationsReady = await catalogNotificationsApp.ready()
+    } catch {
+      state.catalogNotificationsReady = false
+    }
+  }
   try {
     const summary = await app.consumer.processBatch()
-    const catalogSummary = await app.catalogEventsConsumer.processBatch()
+    const catalogSummary = await catalogCreatedConsumer.processBatch()
+    const lifecycleSummary = await catalogNotificationsApp?.lifecycleEventsConsumer.processBatch()
     state.lastPollSucceeded = true
 
     if (summary.received > 0) {
@@ -133,6 +185,9 @@ while (state.running) {
     }
     if (catalogSummary.received > 0) {
       app.logger.info('catalog_events_batch_processed', { ...catalogSummary })
+    }
+    if (lifecycleSummary !== undefined && lifecycleSummary.received > 0) {
+      app.logger.info('catalog_lifecycle_events_batch_processed', { ...lifecycleSummary })
     }
   } catch (error: unknown) {
     state.lastPollSucceeded = false

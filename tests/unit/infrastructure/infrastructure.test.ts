@@ -129,6 +129,92 @@ describe('loadConfig', () => {
   ])('rechaza %s', (_caso, env) => {
     expect(() => loadConfig(env)).toThrow(ConfigurationError)
   })
+
+  describe('CATALOG_NOTIFICATIONS_HTTP_ENABLED (HU-38)', () => {
+    const BASE = {
+      CATALOG_NOTIFICATIONS_HTTP_ENABLED: 'true',
+      MONGO_URL: 'mongodb://localhost:27017',
+      COGNITO_USER_POOL_ID: 'us-east-1_pruebas',
+      COGNITO_CLIENT_ID: 'cliente-de-pruebas',
+    }
+
+    it('desactivada por defecto', () => {
+      expect(loadConfig({}).catalogNotifications).toBeNull()
+    })
+
+    it('activa con la configuracion minima y puerto por defecto', () => {
+      const config = loadConfig(BASE)
+
+      expect(config.catalogNotifications).toMatchObject({
+        port: 3004,
+        repositoryDriver: 'mongo',
+        cognitoUserPoolId: 'us-east-1_pruebas',
+        cognitoClientId: 'cliente-de-pruebas',
+        lifecycleQueueUrl: null,
+      })
+    })
+
+    it('lee una cola de ciclo de vida dedicada cuando se define', () => {
+      const config = loadConfig({
+        ...BASE,
+        CATALOG_LIFECYCLE_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/lifecycle',
+      })
+
+      expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/lifecycle',
+      )
+    })
+
+    it('exige MONGO_URL cuando el driver es mongo', () => {
+      expect(() =>
+        loadConfig({ ...BASE, MONGO_URL: '', CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'mongo' }),
+      ).toThrow(/MONGO_URL es obligatorio/)
+    })
+
+    it('exige COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID', () => {
+      expect(() => loadConfig({ ...BASE, COGNITO_USER_POOL_ID: '' })).toThrow(
+        /COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID son obligatorios/,
+      )
+      expect(() => loadConfig({ ...BASE, COGNITO_CLIENT_ID: '' })).toThrow(
+        /COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID son obligatorios/,
+      )
+    })
+
+    it('rechaza un puerto que coincide con el de salud o el de compras', () => {
+      expect(() => loadConfig({ ...BASE, CATALOG_NOTIFICATIONS_HTTP_PORT: '3001' })).toThrow(
+        /debe ser distinto de los otros puertos/,
+      )
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          PURCHASE_HTTP_ENABLED: 'true',
+          INTERNAL_SERVICE_AUTH_SECRET: 's',
+          PURCHASE_INBOX_DRIVER: 'memory',
+          CATALOG_NOTIFICATIONS_HTTP_PORT: '3003',
+        }),
+      ).toThrow(/debe ser distinto de los otros puertos/)
+    })
+
+    it('en produccion exige persistencia mongo', () => {
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          NODE_ENV: 'production',
+          CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'memory',
+        }),
+      ).toThrow(/requieren persistencia Mongo/)
+    })
+
+    it('acepta el driver en memoria fuera de produccion', () => {
+      const config = loadConfig({
+        ...BASE,
+        MONGO_URL: '',
+        CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'memory',
+      })
+
+      expect(config.catalogNotifications?.repositoryDriver).toBe('memory')
+    })
+  })
 })
 
 describe('createLogger', () => {

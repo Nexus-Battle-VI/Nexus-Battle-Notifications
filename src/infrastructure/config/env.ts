@@ -28,8 +28,26 @@ export interface PurchaseConfig {
   readonly databaseName: string
 }
 
+export interface CatalogNotificationsConfig {
+  readonly port: number
+  readonly repositoryDriver: 'mongo' | 'memory'
+  readonly mongoUrl: string | null
+  readonly databaseName: string
+  readonly cognitoUserPoolId: string
+  readonly cognitoClientId: string
+  /**
+   * `null` cuando no hay cola dedicada configurada (estado actual en
+   * produccion: Infrastructure no provisiona todavia transporte para
+   * catalog.product.suspended/reactivated/inventory.adjusted/
+   * premium.configured). El consumidor sigue existiendo y puede ejercitarse
+   * en memoria; solo carece de una cola SQS real que alimentarlo.
+   */
+  readonly lifecycleQueueUrl: string | null
+}
+
 export interface AppConfig {
   readonly purchase: PurchaseConfig | null
+  readonly catalogNotifications: CatalogNotificationsConfig | null
   readonly nodeEnv: 'development' | 'test' | 'production'
   readonly serviceName: string
   readonly version: string
@@ -225,6 +243,62 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     }
   }
 
+  let catalogNotifications: CatalogNotificationsConfig | null = null
+  if (readBoolean(env, 'CATALOG_NOTIFICATIONS_HTTP_ENABLED', false)) {
+    const port = readInteger(env, 'CATALOG_NOTIFICATIONS_HTTP_PORT', 3004, 1, 65535)
+    const repositoryDriver = readEnum(
+      env,
+      'CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER',
+      ['mongo', 'memory'] as const,
+      'mongo',
+    )
+    const mongoUrl = readString(env, 'MONGO_URL', '') || null
+    const cognitoUserPoolId = readString(env, 'COGNITO_USER_POOL_ID', '')
+    const cognitoClientId = readString(env, 'COGNITO_CLIENT_ID', '')
+
+    if (repositoryDriver === 'mongo' && mongoUrl === null) {
+      throw new ConfigurationError(
+        'MONGO_URL es obligatorio para la persistencia de notificaciones de catalogo.',
+      )
+    }
+
+    if (cognitoUserPoolId === '' || cognitoClientId === '') {
+      throw new ConfigurationError(
+        'COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID son obligatorios cuando CATALOG_NOTIFICATIONS_HTTP_ENABLED es "true".',
+      )
+    }
+
+    if (
+      port === healthPort ||
+      (ingestEnabled && port === ingestPort) ||
+      (purchase !== null && port === purchase.port)
+    ) {
+      throw new ConfigurationError(
+        'CATALOG_NOTIFICATIONS_HTTP_PORT debe ser distinto de los otros puertos.',
+      )
+    }
+
+    if (nodeEnv === 'production' && repositoryDriver !== 'mongo') {
+      throw new ConfigurationError(
+        'Las notificaciones de catalogo en produccion requieren persistencia Mongo.',
+      )
+    }
+
+    catalogNotifications = {
+      port,
+      repositoryDriver,
+      mongoUrl,
+      databaseName: readString(env, 'MONGO_DB_NAME', 'notifications'),
+      cognitoUserPoolId,
+      cognitoClientId,
+      lifecycleQueueUrl:
+        env['CATALOG_LIFECYCLE_QUEUE_URL'] === undefined ||
+        env['CATALOG_LIFECYCLE_QUEUE_URL'] === ''
+          ? null
+          : env['CATALOG_LIFECYCLE_QUEUE_URL'],
+    }
+  }
+
   if (retryMaxDelayMs < retryBaseDelayMs) {
     throw new ConfigurationError('RETRY_MAX_DELAY_MS no puede ser menor que RETRY_BASE_DELAY_MS.')
   }
@@ -232,6 +306,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   return {
     nodeEnv,
     purchase,
+    catalogNotifications,
     serviceName: readString(env, 'SERVICE_NAME', 'nexus-battle-notifications'),
     version: readString(env, 'SERVICE_VERSION', '0.1.0'),
     logLevel: readEnum(env, 'LOG_LEVEL', ['debug', 'info', 'warn', 'error'] as const, 'info'),

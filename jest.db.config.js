@@ -19,7 +19,12 @@ export default {
   },
   testMatch: ['<rootDir>/tests/db/**/*.test.ts'],
   testTimeout: 180000,
-  collectCoverageFrom: ['src/adapters/idempotency/MongoPurchaseInbox.ts'],
+  collectCoverageFrom: [
+    'src/adapters/idempotency/MongoPurchaseInbox.ts',
+    'src/adapters/persistence/MongoCatalogNotificationRepository.ts',
+    'src/adapters/persistence/MongoGlobalNotificationReceiptRepository.ts',
+    'src/adapters/persistence/MongoBannerRepository.ts',
+  ],
   coverageDirectory: 'coverage-db',
   coverageReporters: ['text-summary'],
   coverageThreshold: { global: { branches: 80, functions: 80, lines: 80, statements: 80 } },
