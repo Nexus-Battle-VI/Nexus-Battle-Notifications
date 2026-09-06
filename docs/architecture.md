@@ -141,13 +141,13 @@ robarían mensajes en vez de recibirlos los dos.
 
 ### Eventos consumidos
 
-| `eventType` (Catalog) | Notificación | Destinatarios |
-| --- | --- | --- |
-| `catalog.product.created` | GLOBAL | Todos (HU-38 no filtra este evento) |
-| `catalog.product.inventory.adjusted` | GLOBAL | Todos |
-| `catalog.product.premium.configured` | GLOBAL | Todos |
-| `catalog.product.suspended` | PLAYER | Quienes poseen el producto |
-| `catalog.product.reactivated` | PLAYER | Quienes poseían el producto |
+| `eventType` (Catalog)                | Notificación | Destinatarios                       |
+| ------------------------------------ | ------------ | ----------------------------------- |
+| `catalog.product.created`            | GLOBAL       | Todos (HU-38 no filtra este evento) |
+| `catalog.product.inventory.adjusted` | GLOBAL       | Todos                               |
+| `catalog.product.premium.configured` | GLOBAL       | Todos                               |
+| `catalog.product.suspended`          | PLAYER       | Quienes poseen el producto          |
+| `catalog.product.reactivated`        | PLAYER       | Quienes poseían el producto         |
 
 `catalog.product.stock.depleted` **no se consume**: no aparece en el alcance
 funcional de HU-38 (Management #46), es una consecuencia de compras, no una
@@ -196,13 +196,13 @@ notificaciones como vistas sin que el jugador las haya visto de verdad.
 
 ### Superficie HTTP (opcional, `CATALOG_NOTIFICATIONS_HTTP_ENABLED`)
 
-| Ruta | Método | Quién |
-| --- | --- | --- |
-| `/api/v1/notifications/me/pending` | GET | Jugador autenticado (su propio `sub`) |
-| `/api/v1/notifications/me/history` | GET | Jugador autenticado |
-| `/api/v1/notifications/me/read` | POST | Jugador autenticado |
-| `/api/v1/banners` | GET | Público, sin testimonio |
-| `/api/v1/admin/banners` | GET, POST | ADMINISTRATOR o SUPER_ADMINISTRATOR |
+| Ruta                               | Método    | Quién                                 |
+| ---------------------------------- | --------- | ------------------------------------- |
+| `/api/v1/notifications/me/pending` | GET       | Jugador autenticado (su propio `sub`) |
+| `/api/v1/notifications/me/history` | GET       | Jugador autenticado                   |
+| `/api/v1/notifications/me/read`    | POST      | Jugador autenticado                   |
+| `/api/v1/banners`                  | GET       | Público, sin testimonio               |
+| `/api/v1/admin/banners`            | GET, POST | ADMINISTRATOR o SUPER_ADMINISTRATOR   |
 
 El `playerId` siempre se deriva de `VerifiedIdentity.subject` (testimonio JWT
 de Cognito, verificado con `aws-jwt-verify` igual que Account/Catalog); nunca
