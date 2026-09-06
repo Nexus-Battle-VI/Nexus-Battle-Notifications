@@ -230,7 +230,7 @@ para que este resolver tenga ocasión de actuar. TASK #175 permanece abierta
 hasta que exista evidencia E2E completa (evento → transporte real →
 Notifications → Player-Inventory → notificación persistida).
 
-### Brecha conocida: transporte de los cuatro eventos de ciclo de vida
+### Estado del transporte de eventos de Catalog
 
 ADR-017 (Infrastructure) está `Accepted` y su cola dedicada para
 `catalog.product.created` ya está **provisionada como código Terraform**
@@ -239,11 +239,26 @@ ADR-017 (Infrastructure) está `Accepted` y su cola dedicada para
 activa con `CATALOG_QUEUE_DRIVER=sqs` -independiente de `QUEUE_DRIVER`, ver
 `.env.example`-, sin exigir la cola general de ADR-006.
 
-Los otros cuatro eventos de ciclo de vida no tienen canal ni cola definidos
-todavía. `CatalogLifecycleEventsConsumer` existe y se ejercita en memoria
-(desarrollo y pruebas); en un despliegue real, sin `CATALOG_LIFECYCLE_QUEUE_URL`,
-cae a una cola en memoria local sin transporte, lo cual se registra
+Los cuatro eventos de ciclo de vida (`suspended`/`reactivated`/
+`inventory.adjusted`/`premium.configured`) ya tienen decisión de transporte:
+**ADR-018 (Infrastructure) está `Accepted`** ([Management #314](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/314)),
+y su cola compartida -con DLQ propia, distinta de la de `created` y de la
+general- ya está **provisionada como código Terraform**
+(`infra/modules/catalog_lifecycle_events_queue`, Infrastructure#95); todavía
+no se aplicó contra una cuenta real. `CatalogLifecycleEventsConsumer` ya
+puede activarse por SQS de forma **independiente** de `QUEUE_DRIVER` y de
+`CATALOG_QUEUE_DRIVER` mediante `CATALOG_LIFECYCLE_QUEUE_DRIVER=sqs` -mismo
+criterio explícito, sin inferencia por presencia de URL, que
+`CATALOG_QUEUE_DRIVER` ya aplicaba para `created`-, y ya no reenvía a la DLQ
+general: un mensaje irreprocesable sigue la redrive policy de su propia cola
+dedicada. Sin `CATALOG_LIFECYCLE_QUEUE_DRIVER=sqs` (el valor por defecto es
+`memory`), el consumidor se ejercita en memoria local, lo cual se registra
 explícitamente en el arranque (`catalog_lifecycle_queue_not_configured`).
+
+Ninguno de los dos transportes está `Applied`/`Deployed`: `terraform apply`
+sigue sin ejecutarse en Infrastructure, y Catalog sigue sin un dispatcher que
+publique sus outbox hacia ninguna de las dos colas (confirmado ausente en
+código, brecha de Catalog).
 
 ### Consolidación
 

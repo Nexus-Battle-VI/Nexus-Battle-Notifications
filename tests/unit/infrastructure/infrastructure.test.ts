@@ -243,6 +243,7 @@ describe('loadConfig', () => {
         cognitoUserPoolId: 'us-east-1_pruebas',
         cognitoClientId: 'cliente-de-pruebas',
         lifecycleQueueUrl: null,
+        lifecycleQueueDriver: 'memory',
       })
     })
 
@@ -255,6 +256,93 @@ describe('loadConfig', () => {
       expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(
         'https://sqs.us-east-1.amazonaws.com/1/lifecycle',
       )
+    })
+
+    describe('CATALOG_LIFECYCLE_QUEUE_DRIVER (desacoplado de QUEUE_DRIVER y CATALOG_QUEUE_DRIVER, ADR-018/Infrastructure#95)', () => {
+      const lifecycleUrl = 'https://sqs.us-east-1.amazonaws.com/1/catalog-lifecycle-notifications'
+
+      it('caso 1: default memory aunque exista CATALOG_LIFECYCLE_QUEUE_URL (no se activa SQS por presencia accidental)', () => {
+        const config = loadConfig({ ...BASE, CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('memory')
+      })
+
+      it('caso 2: sqs + URL + region carga correctamente', () => {
+        const config = loadConfig({
+          ...BASE,
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+          CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('sqs')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(lifecycleUrl)
+      })
+
+      it('caso 3: sqs sin CATALOG_LIFECYCLE_QUEUE_URL falla', () => {
+        expect(() =>
+          loadConfig({ ...BASE, CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' }),
+        ).toThrow(/CATALOG_LIFECYCLE_QUEUE_URL es obligatorio/)
+      })
+
+      it('caso 4: sqs sin AWS_REGION falla', () => {
+        expect(() =>
+          loadConfig({
+            ...BASE,
+            CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+            CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          }),
+        ).toThrow(/AWS_REGION es obligatorio cuando CATALOG_LIFECYCLE_QUEUE_DRIVER es "sqs"/)
+      })
+
+      it('caso 5: general memory + created sqs + lifecycle sqs es una configuracion valida, con URLs independientes', () => {
+        const config = loadConfig({
+          ...BASE,
+          QUEUE_DRIVER: 'memory',
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL:
+            'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+          CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.queueDriver).toBe('memory')
+        expect(config.catalogQueueDriver).toBe('sqs')
+        expect(config.catalogQueueUrl).toBe(
+          'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+        )
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('sqs')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(lifecycleUrl)
+      })
+
+      it('caso 6: QUEUE_DRIVER=sqs general sin QUEUE_URL sigue fallando igual que antes', () => {
+        expect(() => loadConfig({ ...BASE, QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' })).toThrow(
+          /QUEUE_URL es obligatorio cuando QUEUE_DRIVER es "sqs"/,
+        )
+      })
+
+      it('caso 7: CATALOG_QUEUE_DRIVER=sqs sin CATALOG_QUEUE_URL sigue fallando igual que antes', () => {
+        expect(() =>
+          loadConfig({ ...BASE, CATALOG_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' }),
+        ).toThrow(/CATALOG_QUEUE_URL \(o CATALOG_EVENTS_QUEUE_URL\) es obligatorio/)
+      })
+
+      it('caso 8: lifecycle memory no activa SQS aunque QUEUE_DRIVER y CATALOG_QUEUE_DRIVER generales sean sqs', () => {
+        const config = loadConfig({
+          ...BASE,
+          QUEUE_DRIVER: 'sqs',
+          QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL:
+            'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'memory',
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('memory')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBeNull()
+      })
     })
 
     it('exige MONGO_URL cuando el driver es mongo', () => {

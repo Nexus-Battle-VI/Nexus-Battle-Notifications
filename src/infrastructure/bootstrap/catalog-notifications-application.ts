@@ -1,6 +1,7 @@
 import { MongoClient } from 'mongodb'
 import type { AppConfig } from '../config/env.js'
 import { QueueDriver } from '../config/env.js'
+import { resolveSqsSettings } from '../aws/sqs-settings.js'
 import { RetryPolicy } from '../../domain/policies/RetryPolicy.js'
 import { SystemClock } from '../../adapters/clock/SystemClock.js'
 import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIdempotencyStore.js'
@@ -26,12 +27,15 @@ import type { CatalogNotificationRepositoryPort } from '../../application/ports/
 import type { GlobalNotificationReceiptRepositoryPort } from '../../application/ports/GlobalNotificationReceiptRepositoryPort.js'
 import type { BannerRepositoryPort } from '../../application/ports/BannerRepositoryPort.js'
 import type { IdentityVerifierPort } from '../../application/ports/IdentityVerifierPort.js'
+import type { MessageQueuePort } from '../../application/ports/MessageQueuePort.js'
 import { createCatalogNotificationsServer } from '../http/catalog-notifications-server.js'
 import type { Logger } from '../observability/logger.js'
 
 export interface CatalogNotificationsApplication {
   readonly server: ReturnType<typeof createCatalogNotificationsServer>
   readonly lifecycleEventsConsumer: CatalogLifecycleEventsConsumer
+  /** Cola sobre la que corre `lifecycleEventsConsumer`. Expuesta por el mismo motivo que `catalogQueue` en composition-root.ts: verificar desde fuera que el transporte elegido es el correcto y que no se comparte con otras colas. */
+  readonly lifecycleQueue: MessageQueuePort
   /** Repositorio compartido con el consumidor in-app de `catalog.product.created` (ver worker.ts). */
   readonly notifications: CatalogNotificationRepositoryPort
   readonly idempotencyStore: InMemoryIdempotencyStore
@@ -131,22 +135,45 @@ export const buildCatalogNotificationsApplication = async (
     idempotencyTtlMs: config.idempotencyTtlMs,
   })
 
+  /**
+   * Cola dedicada de los cuatro eventos de ciclo de vida (ADR-018,
+   * Infrastructure#95). Independiente de `queueDriver` (cola general) y de
+   * `catalogQueueDriver` (`catalog.product.created`): activar SQS aqui no
+   * exige ninguno de los otros dos, y viceversa (ver el comentario de
+   * `lifecycleQueueDriver` en env.ts).
+   *
+   * Sin `deadLetterQueueUrl`, a proposito: no se reutiliza la DLQ general ni
+   * la de `catalog.product.created` -mezclarlas violaria la condicion de
+   * Management#314 y la DLQ propia que Infrastructure#95 provisiona para esta
+   * cola-. Un mensaje irreprocesable sigue entonces la redrive policy de la
+   * propia cola SQS dedicada (`SqsMessageQueue.deadLetter` pone visibilidad a
+   * 0 hasta que `ApproximateReceiveCount` alcanza el maximo), mismo patron
+   * que `catalogQueue` en composition-root.ts.
+   */
   let lifecycleQueue: InMemoryMessageQueue | SqsMessageQueue
-  if (config.queueDriver === QueueDriver.Sqs && catalogNotifications.lifecycleQueueUrl !== null) {
+  if (catalogNotifications.lifecycleQueueDriver === QueueDriver.Sqs) {
+    // `loadConfig` ya garantiza lifecycleQueueUrl/awsRegion no nulos con este driver.
+    const lifecycleSettings = resolveSqsSettings({
+      region: config.awsRegion,
+      queueUrl: catalogNotifications.lifecycleQueueUrl,
+    })
+    logger.info('catalog_lifecycle_queue_configured', {
+      dedicated: true,
+      queueName: lifecycleSettings.queueName,
+      region: lifecycleSettings.region,
+    })
+
     lifecycleQueue = new SqsMessageQueue({
       client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
-      queueUrl: catalogNotifications.lifecycleQueueUrl,
-      deadLetterQueueUrl: config.deadLetterQueueUrl,
+      queueUrl: catalogNotifications.lifecycleQueueUrl ?? '',
     })
-    logger.info('catalog_lifecycle_queue_configured', { dedicated: true })
   } else {
     // Sin cola dedicada: cola en memoria propia (no la de otros consumidores),
-    // para no competir por mensajes ajenos. Ver brecha de transporte en el
-    // informe de entrega de HU-38 -Infrastructure no provisiona todavia una
-    // cola real para estos cuatro eventos-.
+    // para no competir por mensajes ajenos.
     lifecycleQueue = new InMemoryMessageQueue(() => clock.now().getTime())
     logger.warn('catalog_lifecycle_queue_not_configured', {
-      reason: 'Sin CATALOG_LIFECYCLE_QUEUE_URL: usando cola en memoria local, sin transporte real.',
+      reason:
+        'CATALOG_LIFECYCLE_QUEUE_DRIVER no es "sqs": usando cola en memoria local, sin transporte real.',
     })
   }
 
@@ -175,6 +202,7 @@ export const buildCatalogNotificationsApplication = async (
   return {
     server,
     lifecycleEventsConsumer,
+    lifecycleQueue,
     notifications,
     idempotencyStore,
     close: async (): Promise<void> => {

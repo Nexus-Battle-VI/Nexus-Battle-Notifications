@@ -155,6 +155,7 @@ app.logger.info('worker_started', {
   emailDriver: config.emailDriver,
   queueDriver: config.queueDriver,
   catalogQueueDriver: config.catalogQueueDriver,
+  catalogLifecycleQueueDriver: config.catalogNotifications?.lifecycleQueueDriver ?? null,
   ingestEnabled: config.ingestEnabled,
   batchSize: config.batchSize,
   pollIntervalMs: config.pollIntervalMs,
