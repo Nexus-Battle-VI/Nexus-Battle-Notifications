@@ -7,34 +7,33 @@ import type { TemplateDefinition } from './InMemoryTemplateRenderer.js'
  * `docs/contracts`. Anadir o retirar una plantilla es un cambio de contrato.
  */
 export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
-
-'account-sanction-applied': {
-  subject: 'Nexus Battles — Se ha aplicado una sancion a tu cuenta',
-  html:
-    '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-    '<p>Hola {{displayName}},</p>' +
-    '<p>Se ha aplicado una sancion a tu cuenta.</p>' +
-    '<p><strong>Tipo de sancion:</strong> {{sanctionType}}</p>' +
-    '<p><strong>Motivo:</strong> {{reason}}</p>' +
-    '<p><strong>Fecha de aplicacion:</strong> {{appliedAt}}</p>' +
-    '<p><strong>Identificador de sancion:</strong> {{sanctionId}}</p>' +
-    '<p>Puedes ejercer tu opcion de apelacion durante los siguientes <strong>{{appealWindowDays}} dias</strong>.</p>' +
-    '<p><strong>Fecha limite para apelar:</strong> {{appealDeadline}}</p>' +
-    '<p>Si la sancion corresponde a una suspension temporal, su fecha de finalizacion es: {{expiresAt}}</p>' +
-    '<p><strong>Equipo Nexus Battles</strong><br>Promoviendo una comunidad segura y justa.</p>',
-  text:
-    'Nexus Battles\n\n' +
-    'Hola {{displayName}},\n\n' +
-    'Se ha aplicado una sancion a tu cuenta.\n\n' +
-    'Tipo de sancion: {{sanctionType}}\n' +
-    'Motivo: {{reason}}\n' +
-    'Fecha de aplicacion: {{appliedAt}}\n' +
-    'Identificador de sancion: {{sanctionId}}\n\n' +
-    'Puedes ejercer tu opcion de apelacion durante los siguientes {{appealWindowDays}} dias.\n' +
-    'Fecha limite para apelar: {{appealDeadline}}\n' +
-    'Fecha de finalizacion de suspension, cuando aplique: {{expiresAt}}\n\n' +
-    'Equipo Nexus Battles\nPromoviendo una comunidad segura y justa.',
-},
+  'account-sanction-applied': {
+    subject: 'Nexus Battles — Se ha aplicado una sancion a tu cuenta',
+    html:
+      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
+      '<p>Hola {{displayName}},</p>' +
+      '<p>Se ha aplicado una sancion a tu cuenta.</p>' +
+      '<p><strong>Tipo de sancion:</strong> {{sanctionType}}</p>' +
+      '<p><strong>Motivo:</strong> {{reason}}</p>' +
+      '<p><strong>Fecha de aplicacion:</strong> {{appliedAt}}</p>' +
+      '<p><strong>Identificador de sancion:</strong> {{sanctionId}}</p>' +
+      '<p>Puedes ejercer tu opcion de apelacion durante los siguientes <strong>{{appealWindowDays}} dias</strong>.</p>' +
+      '<p><strong>Fecha limite para apelar:</strong> {{appealDeadline}}</p>' +
+      '<p>Si la sancion corresponde a una suspension temporal, su fecha de finalizacion es: {{expiresAt}}</p>' +
+      '<p><strong>Equipo Nexus Battles</strong><br>Promoviendo una comunidad segura y justa.</p>',
+    text:
+      'Nexus Battles\n\n' +
+      'Hola {{displayName}},\n\n' +
+      'Se ha aplicado una sancion a tu cuenta.\n\n' +
+      'Tipo de sancion: {{sanctionType}}\n' +
+      'Motivo: {{reason}}\n' +
+      'Fecha de aplicacion: {{appliedAt}}\n' +
+      'Identificador de sancion: {{sanctionId}}\n\n' +
+      'Puedes ejercer tu opcion de apelacion durante los siguientes {{appealWindowDays}} dias.\n' +
+      'Fecha limite para apelar: {{appealDeadline}}\n' +
+      'Fecha de finalizacion de suspension, cuando aplique: {{expiresAt}}\n\n' +
+      'Equipo Nexus Battles\nPromoviendo una comunidad segura y justa.',
+  },
 
   'commerce-purchase-confirmed-v1': {
     subject: 'Nexus Battles VI — Confirmacion de compra {{orderId}}',
