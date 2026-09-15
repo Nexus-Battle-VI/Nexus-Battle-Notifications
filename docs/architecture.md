@@ -119,3 +119,184 @@ No se registran cuerpos de correo ni contenido renderizado.
 - No se integra ningún proveedor de correo real. `FakeEmailSender` es el adaptador por defecto y `SmtpEmailSender` apunta a Mailpit en local.
 
 Estas limitaciones están declaradas de forma explícita para que la arquitectura de demo no se confunda con la arquitectura objetivo, documentada en `docs/architecture/target-scale-deployment.md` de Nexus-Battle-Infrastructure.
+
+## HU-38 — Notificaciones de catálogo al iniciar sesión y banner informativo
+
+HU-38 añade un segundo bounded context de lectura/escritura dentro de este mismo
+servicio, deliberadamente separado del correo transaccional:
+
+```text
+CatalogNotification   in-app, dirigida a un jugador o GLOBAL (todos)
+BannerEntry           anuncio administrado manualmente por Admin/Super Admin
+```
+
+**No es el mismo agregado que `Notification`** (correo, HU-04/HU-33.10): sus
+invariantes son distintas -intentos de entrega y política de reintentos de
+proveedor, frente a estado de lectura y consolidación-. `HandleCatalogProductCreated`
+(correo) sigue sin tocarse; `HandleCatalogProductCreatedNotifications` la
+compone junto con la nueva reacción in-app sobre el mismo mensaje de
+`catalog.product.created`, porque `MessageQueuePort` tiene semántica de
+consumidor competitivo y dos consumidores separados sobre la misma cola se
+robarían mensajes en vez de recibirlos los dos.
+
+### Eventos consumidos
+
+| `eventType` (Catalog)                | Notificación | Destinatarios                       |
+| ------------------------------------ | ------------ | ----------------------------------- |
+| `catalog.product.created`            | GLOBAL       | Todos (HU-38 no filtra este evento) |
+| `catalog.product.inventory.adjusted` | GLOBAL       | Todos                               |
+| `catalog.product.premium.configured` | GLOBAL       | Todos                               |
+| `catalog.product.suspended`          | PLAYER       | Quienes poseen el producto          |
+| `catalog.product.reactivated`        | PLAYER       | Quienes poseían el producto         |
+
+`catalog.product.stock.depleted` **no se consume**: no aparece en el alcance
+funcional de HU-38 (Management #46), es una consecuencia de compras, no una
+acción administrativa de HU-033 a HU-037. No hay evento de "diseño" (HU-37) en
+Catalog todavía, así que ese tipo de cambio tampoco tiene contraparte real.
+
+### Destinatarios de suspensión/reactivación
+
+Resuelto contra `Nexus-Battle-Player-Inventory#23`
+(`GET /api/internal/v1/inventory/products/{productId}/owners`, contrato
+servicio-a-servicio con HMAC-SHA256). `PlayerInventoryProductOwnersResolver`
+implementa `ProductOwnersResolverPort`: firma la petición con
+`internal-signature.ts` -la misma función que este servicio ya usaba para
+VERIFICAR la firma de Commerce en `purchase-server.ts`, ahora usada también
+como cliente- y traduce la respuesta a `{ available: true, playerIds }`.
+
+Cualquier fallo -red, timeout, `4xx`/`5xx`, JSON ilegible, forma de respuesta
+inesperada, un `productId` de respuesta que no coincide con el pedido, o el
+resolver sin configurar (`UnavailableProductOwnersResolver`)- se traduce a
+`{ available: false, reason }`, **nunca** a `playerIds: []`: confundir "no se
+pudo preguntar" con "no tiene propietarios" perdería notificaciones en
+silencio.
+
+**Corrección importante (tras detectar la brecha):** antes de esta
+corrección, `available: false` SIEMPRE confirmaba la idempotencia y
+confirmaba el mensaje (`ACK`) como si hubiera terminado con éxito -una
+decisión razonable mientras la brecha era "el contrato no existe", pero que
+tras integrar una llamada HTTP real (Player-Inventory#23) perdía la
+notificación para siempre ante cualquier fallo transitorio: timeout, un
+reinicio de Player-Inventory, un `503` momentáneo-. Ahora:
+
+```text
+Catalog lifecycle event (suspended/reactivated)
+        ↓
+Notifications (HandleCatalogLifecycleEvent)
+        ↓
+Player-Inventory (ProductOwnersResolverPort)
+        ↓
+disponible          → crear CatalogNotification PLAYER, confirmar, ACK
+no disponible       → liberar idempotencia, NO confirmar, reencolar (RetryPolicy)
+intentos agotados   → confirmar, dead-letter (no se pierde: queda en la DLQ)
+```
+
+`HandleCatalogLifecycleEvent.execute()` ahora recibe `deliveryAttempt` (igual
+que `HandleCatalogProductCreated`) y reutiliza la MISMA `RetryPolicy` -sin
+variables ni números nuevos, `MAX_ATTEMPTS`/`RETRY_BASE_DELAY_MS`/
+`RETRY_MAX_DELAY_MS` de siempre- para decidir entre `Retry` y `DeadLetter`.
+`CatalogLifecycleEventsConsumer` sigue exactamente el mismo patrón de
+`CatalogProductEventsConsumer`: `Retry` reencola (`queue.requeue`, nunca
+`acknowledge`), `DeadLetter` va a la cola de fallidos
+(`queue.deadLetter`), y solo `Processed`/`Duplicated` confirman el mensaje.
+El resolver sin configurar sigue exactamente esta misma ruta -nunca un `ACK`
+permanente disfrazado de éxito, y nunca cae a audiencia GLOBAL como
+sustituto-.
+
+En el caso de `DeadLetter` se confirma la idempotencia (mismo criterio que
+`HandleCatalogProductCreated`): una redelivery del mismo `eventId` no
+reprocesa el mismo fallo indefinidamente. Un replay manual desde la cola de
+fallidos requiere limpiar esa reserva explícitamente, igual que ya exige hoy
+el flujo de correo.
+
+El adaptador HTTP es **opcional y falla cerrado por diseño**: sin
+`PLAYER_INVENTORY_BASE_URL` o sin `INTERNAL_SERVICE_AUTH_SECRET` (el mismo
+secreto compartido que ya exige `PURCHASE_HTTP_ENABLED`), la composición usa
+`UnavailableProductOwnersResolver` -el mismo comportamiento seguro que existía
+antes de esta integración, no un adaptador nuevo a medio configurar- y lo
+registra al arrancar (`product_owners_resolver_not_configured`). Con ambas
+variables presentes, se registra `product_owners_resolver_configured`. Sigue
+siendo **at-least-once + idempotencia**, nunca exactly-once: una redelivery
+tras un `Retry` puede, en teoría, llegar a resolver dos veces si el reencolado
+compite con una redelivery natural de la cola: la clave de idempotencia sigue
+siendo la única garantía contra notificaciones duplicadas, igual que en el
+resto del servicio.
+
+**Brecha que permanece:** esta integración resuelve el tramo
+Notifications→Player-Inventory. El tramo Catalog→Notifications sigue
+limitado por la brecha de transporte descrita abajo: sin una cola real para
+`catalog.product.suspended`/`reactivated`, el evento no llega en producción
+para que este resolver tenga ocasión de actuar. TASK #175 permanece abierta
+hasta que exista evidencia E2E completa (evento → transporte real →
+Notifications → Player-Inventory → notificación persistida).
+
+### Estado del transporte de eventos de Catalog
+
+ADR-017 (Infrastructure) está `Accepted` y su cola dedicada para
+`catalog.product.created` ya está **provisionada como código Terraform**
+(Infrastructure#93); todavía no se aplicó contra una cuenta real
+(`terraform apply` pendiente). El transporte de `catalog.product.created` se
+activa con `CATALOG_QUEUE_DRIVER=sqs` -independiente de `QUEUE_DRIVER`, ver
+`.env.example`-, sin exigir la cola general de ADR-006.
+
+Los cuatro eventos de ciclo de vida (`suspended`/`reactivated`/
+`inventory.adjusted`/`premium.configured`) ya tienen decisión de transporte:
+**ADR-018 (Infrastructure) está `Accepted`** ([Management #314](https://github.com/Nexus-Battle-VI/Nexus-Battle-Management/issues/314)),
+y su cola compartida -con DLQ propia, distinta de la de `created` y de la
+general- ya está **provisionada como código Terraform**
+(`infra/modules/catalog_lifecycle_events_queue`, Infrastructure#95); todavía
+no se aplicó contra una cuenta real. `CatalogLifecycleEventsConsumer` ya
+puede activarse por SQS de forma **independiente** de `QUEUE_DRIVER` y de
+`CATALOG_QUEUE_DRIVER` mediante `CATALOG_LIFECYCLE_QUEUE_DRIVER=sqs` -mismo
+criterio explícito, sin inferencia por presencia de URL, que
+`CATALOG_QUEUE_DRIVER` ya aplicaba para `created`-, y ya no reenvía a la DLQ
+general: un mensaje irreprocesable sigue la redrive policy de su propia cola
+dedicada. Sin `CATALOG_LIFECYCLE_QUEUE_DRIVER=sqs` (el valor por defecto es
+`memory`), el consumidor se ejercita en memoria local, lo cual se registra
+explícitamente en el arranque (`catalog_lifecycle_queue_not_configured`).
+
+Ninguno de los dos transportes está `Applied`/`Deployed`: `terraform apply`
+sigue sin ejecutarse en Infrastructure, y Catalog sigue sin un dispatcher que
+publique sus outbox hacia ninguna de las dos colas (confirmado ausente en
+código, brecha de Catalog).
+
+### Consolidación
+
+`GetPlayerNotifications` agrupa por `(productId, changeType)`: dos o más
+notificaciones pendientes del mismo producto y mismo tipo de cambio se
+presentan como una entrada ("Armadura de Escamas tuvo 4 actualizaciones
+recientes; ver detalle"), conservando las notificaciones originales para el
+historial. No se agrupan tipos de cambio distintos del mismo producto -una
+suspensión aislada no debe quedar enterrada dentro de un lote de ajustes de
+tiraje-, ni productos distintos entre sí.
+
+### Marcado como leído
+
+Presentar y marcar como leída son dos operaciones separadas
+(`GET .../pending` y `POST .../read`), no una sola: automatizar la escritura
+dentro de la lectura habría hecho que un simple refresco de pantalla marcara
+notificaciones como vistas sin que el jugador las haya visto de verdad.
+
+### Superficie HTTP (opcional, `CATALOG_NOTIFICATIONS_HTTP_ENABLED`)
+
+| Ruta                               | Método    | Quién                                 |
+| ---------------------------------- | --------- | ------------------------------------- |
+| `/api/v1/notifications/me/pending` | GET       | Jugador autenticado (su propio `sub`) |
+| `/api/v1/notifications/me/history` | GET       | Jugador autenticado                   |
+| `/api/v1/notifications/me/read`    | POST      | Jugador autenticado                   |
+| `/api/v1/banners`                  | GET       | Público, sin testimonio               |
+| `/api/v1/admin/banners`            | GET, POST | ADMINISTRATOR o SUPER_ADMINISTRATOR   |
+
+El `playerId` siempre se deriva de `VerifiedIdentity.subject` (testimonio JWT
+de Cognito, verificado con `aws-jwt-verify` igual que Account/Catalog); nunca
+se acepta desde la URL o el cuerpo. MODERATOR no está autorizado sobre el
+banner: HU-38 solo nombra Admin y Super Admin.
+
+### HU-38.6 — Correo: NO APLICA
+
+No se implementó ninguna integración con el módulo de correo para HU-38.
+HU-38 y RF-38 exigen notificación in-app y banner como canal principal; no
+existe una regla de negocio aprobada que obligue a replicar por correo la
+creación, el ajuste de tiraje, la condición Premium, la suspensión o la
+reactivación de un producto. `SesEmailSender`, `SmtpEmailSender` y las
+plantillas existentes no se tocaron.

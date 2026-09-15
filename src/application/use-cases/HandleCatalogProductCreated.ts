@@ -30,6 +30,19 @@ export interface HandleCatalogProductCreatedResult {
   readonly reason: string | null
 }
 
+/**
+ * Forma estructural que `CatalogProductEventsConsumer` realmente necesita.
+ * Permite que `HandleCatalogProductCreatedNotifications` (HU-38, compone esta
+ * clase con la reacción in-app) sea intercambiable con esta sin heredar de
+ * ella ni exponer su estado privado.
+ */
+export interface CatalogProductCreatedHandler {
+  execute(params: {
+    event: CatalogProductCreatedEvent
+    deliveryAttempt: number
+  }): Promise<HandleCatalogProductCreatedResult>
+}
+
 export interface HandleCatalogProductCreatedDependencies {
   readonly emailSender: EmailSenderPort
   readonly templateRenderer: TemplateRendererPort
