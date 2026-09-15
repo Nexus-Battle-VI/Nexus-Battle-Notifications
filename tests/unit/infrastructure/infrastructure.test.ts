@@ -24,6 +24,8 @@ describe('loadConfig', () => {
       smtpPass: null,
       queueDriver: 'memory',
       queueUrl: null,
+      catalogQueueDriver: 'memory',
+      catalogQueueUrl: null,
       awsRegion: null,
       batchSize: 10,
       maxAttempts: 5,
@@ -92,6 +94,96 @@ describe('loadConfig', () => {
     expect(config.awsRegion).toBe('us-east-1')
   })
 
+  describe('CATALOG_QUEUE_DRIVER (desacoplado de QUEUE_DRIVER, Infrastructure#93)', () => {
+    it('caso A: ambos en memoria, sin exigir ninguna URL', () => {
+      const config = loadConfig({ QUEUE_DRIVER: 'memory', CATALOG_QUEUE_DRIVER: 'memory' })
+
+      expect(config.queueDriver).toBe('memory')
+      expect(config.catalogQueueDriver).toBe('memory')
+    })
+
+    it('caso B: cola general en memoria y Catalog por SQS, sin exigir QUEUE_URL general', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'memory',
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.queueDriver).toBe('memory')
+      expect(config.queueUrl).toBeNull()
+      expect(config.catalogQueueDriver).toBe('sqs')
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
+
+    it('caso C: Catalog por SQS sin CATALOG_QUEUE_URL falla', () => {
+      expect(() => loadConfig({ CATALOG_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' })).toThrow(
+        /CATALOG_QUEUE_URL \(o CATALOG_EVENTS_QUEUE_URL\) es obligatorio/,
+      )
+    })
+
+    it('acepta CATALOG_EVENTS_QUEUE_URL como alias de CATALOG_QUEUE_URL', () => {
+      const config = loadConfig({
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_EVENTS_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
+
+    it('caso D: Catalog por SQS sin AWS_REGION falla', () => {
+      expect(() =>
+        loadConfig({
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        }),
+      ).toThrow(/AWS_REGION es obligatorio cuando CATALOG_QUEUE_DRIVER es "sqs"/)
+    })
+
+    it('caso E: QUEUE_DRIVER=sqs sin QUEUE_URL general sigue fallando igual que antes, sin relacion con Catalog', () => {
+      expect(() =>
+        loadConfig({
+          QUEUE_DRIVER: 'sqs',
+          AWS_REGION: 'us-east-1',
+          CATALOG_QUEUE_DRIVER: 'memory',
+        }),
+      ).toThrow(/QUEUE_URL es obligatorio cuando QUEUE_DRIVER es "sqs"/)
+    })
+
+    it('queue general SQS + Catalog en memoria: cada driver se valida por su cuenta', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'sqs',
+        QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+        AWS_REGION: 'us-east-1',
+        CATALOG_QUEUE_DRIVER: 'memory',
+      })
+
+      expect(config.queueDriver).toBe('sqs')
+      expect(config.catalogQueueDriver).toBe('memory')
+      expect(config.catalogQueueUrl).toBeNull()
+    })
+
+    it('ambas colas por SQS, con URLs independientes', () => {
+      const config = loadConfig({
+        QUEUE_DRIVER: 'sqs',
+        QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+        CATALOG_QUEUE_DRIVER: 'sqs',
+        CATALOG_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+        AWS_REGION: 'us-east-1',
+      })
+
+      expect(config.queueUrl).toBe('https://sqs.us-east-1.amazonaws.com/1/notificaciones')
+      expect(config.catalogQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created',
+      )
+    })
+  })
+
   it('activa la ingesta y lee su puerto y secreto', () => {
     const config = loadConfig({
       INGEST_ENABLED: 'true',
@@ -128,6 +220,222 @@ describe('loadConfig', () => {
     ],
   ])('rechaza %s', (_caso, env) => {
     expect(() => loadConfig(env)).toThrow(ConfigurationError)
+  })
+
+  describe('CATALOG_NOTIFICATIONS_HTTP_ENABLED (HU-38)', () => {
+    const BASE = {
+      CATALOG_NOTIFICATIONS_HTTP_ENABLED: 'true',
+      MONGO_URL: 'mongodb://localhost:27017',
+      COGNITO_USER_POOL_ID: 'us-east-1_pruebas',
+      COGNITO_CLIENT_ID: 'cliente-de-pruebas',
+    }
+
+    it('desactivada por defecto', () => {
+      expect(loadConfig({}).catalogNotifications).toBeNull()
+    })
+
+    it('activa con la configuracion minima y puerto por defecto', () => {
+      const config = loadConfig(BASE)
+
+      expect(config.catalogNotifications).toMatchObject({
+        port: 3004,
+        repositoryDriver: 'mongo',
+        cognitoUserPoolId: 'us-east-1_pruebas',
+        cognitoClientId: 'cliente-de-pruebas',
+        lifecycleQueueUrl: null,
+        lifecycleQueueDriver: 'memory',
+      })
+    })
+
+    it('lee una cola de ciclo de vida dedicada cuando se define', () => {
+      const config = loadConfig({
+        ...BASE,
+        CATALOG_LIFECYCLE_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/lifecycle',
+      })
+
+      expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(
+        'https://sqs.us-east-1.amazonaws.com/1/lifecycle',
+      )
+    })
+
+    describe('CATALOG_LIFECYCLE_QUEUE_DRIVER (desacoplado de QUEUE_DRIVER y CATALOG_QUEUE_DRIVER, ADR-018/Infrastructure#95)', () => {
+      const lifecycleUrl = 'https://sqs.us-east-1.amazonaws.com/1/catalog-lifecycle-notifications'
+
+      it('caso 1: default memory aunque exista CATALOG_LIFECYCLE_QUEUE_URL (no se activa SQS por presencia accidental)', () => {
+        const config = loadConfig({ ...BASE, CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('memory')
+      })
+
+      it('caso 2: sqs + URL + region carga correctamente', () => {
+        const config = loadConfig({
+          ...BASE,
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+          CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('sqs')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(lifecycleUrl)
+      })
+
+      it('caso 3: sqs sin CATALOG_LIFECYCLE_QUEUE_URL falla', () => {
+        expect(() =>
+          loadConfig({ ...BASE, CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' }),
+        ).toThrow(/CATALOG_LIFECYCLE_QUEUE_URL es obligatorio/)
+      })
+
+      it('caso 4: sqs sin AWS_REGION falla', () => {
+        expect(() =>
+          loadConfig({
+            ...BASE,
+            CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+            CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          }),
+        ).toThrow(/AWS_REGION es obligatorio cuando CATALOG_LIFECYCLE_QUEUE_DRIVER es "sqs"/)
+      })
+
+      it('caso 5: general memory + created sqs + lifecycle sqs es una configuracion valida, con URLs independientes', () => {
+        const config = loadConfig({
+          ...BASE,
+          QUEUE_DRIVER: 'memory',
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL:
+            'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'sqs',
+          CATALOG_LIFECYCLE_QUEUE_URL: lifecycleUrl,
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.queueDriver).toBe('memory')
+        expect(config.catalogQueueDriver).toBe('sqs')
+        expect(config.catalogQueueUrl).toBe(
+          'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+        )
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('sqs')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBe(lifecycleUrl)
+      })
+
+      it('caso 6: QUEUE_DRIVER=sqs general sin QUEUE_URL sigue fallando igual que antes', () => {
+        expect(() => loadConfig({ ...BASE, QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' })).toThrow(
+          /QUEUE_URL es obligatorio cuando QUEUE_DRIVER es "sqs"/,
+        )
+      })
+
+      it('caso 7: CATALOG_QUEUE_DRIVER=sqs sin CATALOG_QUEUE_URL sigue fallando igual que antes', () => {
+        expect(() =>
+          loadConfig({ ...BASE, CATALOG_QUEUE_DRIVER: 'sqs', AWS_REGION: 'us-east-1' }),
+        ).toThrow(/CATALOG_QUEUE_URL \(o CATALOG_EVENTS_QUEUE_URL\) es obligatorio/)
+      })
+
+      it('caso 8: lifecycle memory no activa SQS aunque QUEUE_DRIVER y CATALOG_QUEUE_DRIVER generales sean sqs', () => {
+        const config = loadConfig({
+          ...BASE,
+          QUEUE_DRIVER: 'sqs',
+          QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/notificaciones',
+          CATALOG_QUEUE_DRIVER: 'sqs',
+          CATALOG_QUEUE_URL:
+            'https://sqs.us-east-1.amazonaws.com/1/catalog-product-created-notifications',
+          CATALOG_LIFECYCLE_QUEUE_DRIVER: 'memory',
+          AWS_REGION: 'us-east-1',
+        })
+
+        expect(config.catalogNotifications?.lifecycleQueueDriver).toBe('memory')
+        expect(config.catalogNotifications?.lifecycleQueueUrl).toBeNull()
+      })
+    })
+
+    it('exige MONGO_URL cuando el driver es mongo', () => {
+      expect(() =>
+        loadConfig({ ...BASE, MONGO_URL: '', CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'mongo' }),
+      ).toThrow(/MONGO_URL es obligatorio/)
+    })
+
+    it('exige COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID', () => {
+      expect(() => loadConfig({ ...BASE, COGNITO_USER_POOL_ID: '' })).toThrow(
+        /COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID son obligatorios/,
+      )
+      expect(() => loadConfig({ ...BASE, COGNITO_CLIENT_ID: '' })).toThrow(
+        /COGNITO_USER_POOL_ID y COGNITO_CLIENT_ID son obligatorios/,
+      )
+    })
+
+    it('rechaza un puerto que coincide con el de salud o el de compras', () => {
+      expect(() => loadConfig({ ...BASE, CATALOG_NOTIFICATIONS_HTTP_PORT: '3001' })).toThrow(
+        /debe ser distinto de los otros puertos/,
+      )
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          PURCHASE_HTTP_ENABLED: 'true',
+          INTERNAL_SERVICE_AUTH_SECRET: 's',
+          PURCHASE_INBOX_DRIVER: 'memory',
+          CATALOG_NOTIFICATIONS_HTTP_PORT: '3003',
+        }),
+      ).toThrow(/debe ser distinto de los otros puertos/)
+    })
+
+    it('en produccion exige persistencia mongo', () => {
+      expect(() =>
+        loadConfig({
+          ...BASE,
+          NODE_ENV: 'production',
+          CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'memory',
+        }),
+      ).toThrow(/requieren persistencia Mongo/)
+    })
+
+    it('acepta el driver en memoria fuera de produccion', () => {
+      const config = loadConfig({
+        ...BASE,
+        MONGO_URL: '',
+        CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'memory',
+      })
+
+      expect(config.catalogNotifications?.repositoryDriver).toBe('memory')
+    })
+
+    describe('playerInventory (HU-38, resolucion de destinatarios)', () => {
+      it('null cuando falta PLAYER_INVENTORY_BASE_URL: fail closed, no bloquea el arranque', () => {
+        const config = loadConfig({ ...BASE, INTERNAL_SERVICE_AUTH_SECRET: 's' })
+
+        expect(config.catalogNotifications?.playerInventory).toBeNull()
+      })
+
+      it('null cuando falta INTERNAL_SERVICE_AUTH_SECRET aunque haya URL', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+        })
+
+        expect(config.catalogNotifications?.playerInventory).toBeNull()
+      })
+
+      it('se activa con URL y secreto, con timeout por defecto', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+          INTERNAL_SERVICE_AUTH_SECRET: 'secreto-compartido',
+        })
+
+        expect(config.catalogNotifications?.playerInventory).toEqual({
+          baseUrl: 'http://player-inventory:3002',
+          secret: 'secreto-compartido',
+          timeoutMs: 2_000,
+        })
+      })
+
+      it('lee un timeout configurado', () => {
+        const config = loadConfig({
+          ...BASE,
+          PLAYER_INVENTORY_BASE_URL: 'http://player-inventory:3002',
+          INTERNAL_SERVICE_AUTH_SECRET: 'secreto-compartido',
+          PLAYER_INVENTORY_TIMEOUT_MS: '5000',
+        })
+
+        expect(config.catalogNotifications?.playerInventory?.timeoutMs).toBe(5_000)
+      })
+    })
   })
 })
 
