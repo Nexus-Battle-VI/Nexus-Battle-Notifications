@@ -11,6 +11,20 @@ import type { GetPlayerNotifications } from '../../application/use-cases/GetPlay
 import type { MarkNotificationsRead } from '../../application/use-cases/MarkNotificationsRead.js'
 import type { CreateBannerEntry } from '../../application/use-cases/CreateBannerEntry.js'
 import type { ListBanners } from '../../application/use-cases/ListBanners.js'
+import type { HandleAuctionWatchlistEvent } from '../../application/use-cases/HandleAuctionWatchlistEvent.js'
+import {
+  InvalidAuctionWatchlistEventError,
+  parseAuctionWatchlistEvent,
+} from '../../adapters/messaging/AuctionWatchlistEventParser.js'
+import {
+  INTERNAL_CLOCK_SKEW_MS,
+  INTERNAL_SERVICE_HEADER,
+  INTERNAL_SIGNATURE_HEADER,
+  INTERNAL_TIMESTAMP_HEADER,
+  signInternalRequest,
+  signatureMatches,
+  timestampWithinWindow,
+} from '../../adapters/identity/internal-signature.js'
 import type { Logger } from '../observability/logger.js'
 
 const MAX_BODY_BYTES = 16 * 1024
@@ -22,6 +36,8 @@ export interface CatalogNotificationsServerOptions {
   readonly markNotificationsRead: MarkNotificationsRead
   readonly createBannerEntry: CreateBannerEntry
   readonly listBanners: ListBanners
+  readonly handleAuctionWatchlistEvent?: HandleAuctionWatchlistEvent
+  readonly internalSharedSecret?: string | null
   readonly logger: Logger
 }
 
@@ -100,6 +116,48 @@ export const createCatalogNotificationsServer = (
       const method = request.method ?? 'GET'
 
       try {
+        if (
+          url === '/api/internal/v1/notifications/auction/watchlist-events' &&
+          method === 'POST'
+        ) {
+          const body = await readBody(request)
+          const secret = options.internalSharedSecret
+          const service = request.headers[INTERNAL_SERVICE_HEADER]
+          const timestamp = request.headers[INTERNAL_TIMESTAMP_HEADER]
+          const receivedSignature = request.headers[INTERNAL_SIGNATURE_HEADER]
+          if (
+            options.handleAuctionWatchlistEvent === undefined ||
+            secret === undefined ||
+            secret === null ||
+            service !== 'auction' ||
+            typeof timestamp !== 'string' ||
+            typeof receivedSignature !== 'string' ||
+            !timestampWithinWindow(timestamp, new Date(), INTERNAL_CLOCK_SKEW_MS)
+          ) {
+            respond(response, 401, { error: 'unauthorized' })
+            return
+          }
+          const expectedSignature = signInternalRequest(secret, {
+            service,
+            method,
+            path: url,
+            timestamp,
+            body,
+          })
+          if (!signatureMatches(expectedSignature, receivedSignature)) {
+            respond(response, 401, { error: 'unauthorized' })
+            return
+          }
+          const event = parseAuctionWatchlistEvent(body)
+          const result = await options.handleAuctionWatchlistEvent.execute(event)
+          respond(response, 200, {
+            eventId: event.eventId,
+            status: result.created > 0 ? 'created' : 'duplicated',
+            ...result,
+          })
+          return
+        }
+
         if (url === '/api/v1/banners' && method === 'GET') {
           respond(response, 200, { items: await options.listBanners.active() })
           return
@@ -180,7 +238,11 @@ export const createCatalogNotificationsServer = (
           return
         }
 
-        if (error instanceof SyntaxError || error instanceof DomainError) {
+        if (
+          error instanceof SyntaxError ||
+          error instanceof DomainError ||
+          error instanceof InvalidAuctionWatchlistEventError
+        ) {
           respond(response, 400, {
             error: 'invalid_request',
             message: error instanceof Error ? error.message : 'Cuerpo invalido.',

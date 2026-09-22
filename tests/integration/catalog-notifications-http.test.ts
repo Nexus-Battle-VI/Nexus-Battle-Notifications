@@ -15,6 +15,13 @@ import { GetPlayerNotifications } from '../../src/application/use-cases/GetPlaye
 import { MarkNotificationsRead } from '../../src/application/use-cases/MarkNotificationsRead.js'
 import { CreateBannerEntry } from '../../src/application/use-cases/CreateBannerEntry.js'
 import { ListBanners } from '../../src/application/use-cases/ListBanners.js'
+import { HandleAuctionWatchlistEvent } from '../../src/application/use-cases/HandleAuctionWatchlistEvent.js'
+import {
+  INTERNAL_SERVICE_HEADER,
+  INTERNAL_SIGNATURE_HEADER,
+  INTERNAL_TIMESTAMP_HEADER,
+  signInternalRequest,
+} from '../../src/adapters/identity/internal-signature.js'
 import {
   IdentityVerificationError,
   Role,
@@ -43,6 +50,7 @@ const stubIdentityVerifier: IdentityVerifierPort = {
 }
 
 describe('Superficie HTTP HU-38 (notificaciones + banner)', () => {
+  const internalSecret = 'test-internal-secret'
   let server: Server
   let url: string
   let notifications: InMemoryCatalogNotificationRepository
@@ -62,6 +70,8 @@ describe('Superficie HTTP HU-38 (notificaciones + banner)', () => {
       markNotificationsRead: new MarkNotificationsRead({ notifications, globalReceipts, clock }),
       createBannerEntry: new CreateBannerEntry({ banners, clock }),
       listBanners: new ListBanners({ banners, clock }),
+      handleAuctionWatchlistEvent: new HandleAuctionWatchlistEvent(notifications, clock),
+      internalSharedSecret: internalSecret,
       logger: createLogger({ level: 'error', service: 'test', version: 'test' }),
     })
     await once(server, 'listening')
@@ -90,6 +100,51 @@ describe('Superficie HTTP HU-38 (notificaciones + banner)', () => {
       },
       body: JSON.stringify(body),
     })
+
+  /** Emula el adaptador productor de Auction con el contrato HMAC real. */
+  const postAuctionEvent = (body: unknown, validSignature = true): Promise<Response> => {
+    const path = '/api/internal/v1/notifications/auction/watchlist-events'
+    const timestamp = String(Date.now())
+    const signature = signInternalRequest(internalSecret, {
+      service: 'auction',
+      method: 'POST',
+      path,
+      timestamp,
+      body,
+    })
+    return fetch(`${url}${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [INTERNAL_SERVICE_HEADER]: 'auction',
+        [INTERNAL_TIMESTAMP_HEADER]: timestamp,
+        [INTERNAL_SIGNATURE_HEADER]: validSignature ? signature : 'invalid',
+      },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('acepta un evento firmado de Auction y rechaza replays sin duplicar', async (): Promise<void> => {
+    const event = {
+      eventId: 'auction-http-event-1',
+      eventType: 'auction.watchlist.changed.v1',
+      auctionId: 'auction-1',
+      recipientPlayerIds: ['jugador-auction-test'],
+      changeType: 'LEADING_BID_CHANGED',
+      occurredAt: new Date().toISOString(),
+    }
+    expect((await postAuctionEvent(event)).status).toBe(200)
+    const replay = await postAuctionEvent(event)
+    expect(replay.status).toBe(200)
+    await expect(replay.json()).resolves.toMatchObject({ status: 'duplicated', created: 0 })
+    const pending = await notifications.findPendingForPlayer('jugador-auction-test')
+    expect(pending.filter((item) => item.sourceEventId === event.eventId)).toHaveLength(1)
+  })
+
+  it('rechaza eventos de Auction con firma inválida', async (): Promise<void> => {
+    const response = await postAuctionEvent({}, false)
+    expect(response.status).toBe(401)
+  })
 
   it('GET /api/v1/notifications/me/pending sin testimonio es 401', async () => {
     const response = await get('/api/v1/notifications/me/pending')

@@ -23,6 +23,7 @@ import { GetPlayerNotifications } from '../../application/use-cases/GetPlayerNot
 import { MarkNotificationsRead } from '../../application/use-cases/MarkNotificationsRead.js'
 import { CreateBannerEntry } from '../../application/use-cases/CreateBannerEntry.js'
 import { ListBanners } from '../../application/use-cases/ListBanners.js'
+import { HandleAuctionWatchlistEvent } from '../../application/use-cases/HandleAuctionWatchlistEvent.js'
 import type { CatalogNotificationRepositoryPort } from '../../application/ports/CatalogNotificationRepositoryPort.js'
 import type { GlobalNotificationReceiptRepositoryPort } from '../../application/ports/GlobalNotificationReceiptRepositoryPort.js'
 import type { BannerRepositoryPort } from '../../application/ports/BannerRepositoryPort.js'
@@ -188,6 +189,7 @@ export const buildCatalogNotificationsApplication = async (
   const markNotificationsRead = new MarkNotificationsRead({ notifications, globalReceipts, clock })
   const createBannerEntry = new CreateBannerEntry({ banners, clock })
   const listBanners = new ListBanners({ banners, clock })
+  const handleAuctionWatchlistEvent = new HandleAuctionWatchlistEvent(notifications, clock)
 
   const server = createCatalogNotificationsServer({
     port: catalogNotifications.port,
@@ -196,6 +198,8 @@ export const buildCatalogNotificationsApplication = async (
     markNotificationsRead,
     createBannerEntry,
     listBanners,
+    handleAuctionWatchlistEvent,
+    internalSharedSecret: catalogNotifications.internalSharedSecret,
     logger,
   })
 

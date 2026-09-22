@@ -35,6 +35,8 @@ export interface CatalogNotificationsConfig {
   readonly databaseName: string
   readonly cognitoUserPoolId: string
   readonly cognitoClientId: string
+  /** Secreto HMAC para aceptar eventos internos emitidos por Auction. */
+  readonly internalSharedSecret: string | null
   /**
    * `null` cuando no hay cola dedicada configurada. El consumidor sigue
    * existiendo y puede ejercitarse en memoria; solo carece de una cola SQS
@@ -417,6 +419,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       databaseName: readString(env, 'MONGO_DB_NAME', 'notifications'),
       cognitoUserPoolId,
       cognitoClientId,
+      internalSharedSecret: readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '') || null,
       lifecycleQueueUrl,
       lifecycleQueueDriver,
       playerInventory: readPlayerInventoryConfig(env),
