@@ -8,6 +8,34 @@ import {
 import { resolveSqsSettings } from '../../../src/infrastructure/aws/sqs-settings.js'
 
 describe('loadConfig', () => {
+  describe('AUCTION_SETTLEMENT_QUEUE_DRIVER', () => {
+    const base = {
+      CATALOG_NOTIFICATIONS_HTTP_ENABLED: 'true',
+      CATALOG_NOTIFICATIONS_REPOSITORY_DRIVER: 'memory',
+      COGNITO_USER_POOL_ID: 'pool',
+      COGNITO_CLIENT_ID: 'client',
+    }
+
+    it('memory no exige URL', () => {
+      expect(
+        loadConfig({ ...base, AUCTION_SETTLEMENT_QUEUE_DRIVER: 'memory' }).catalogNotifications
+          ?.auctionSettlementQueueUrl,
+      ).toBeNull()
+    })
+
+    it('sqs fail-closed sin URL o region', () => {
+      expect(() => loadConfig({ ...base, AUCTION_SETTLEMENT_QUEUE_DRIVER: 'sqs' })).toThrow(
+        /AUCTION_SETTLEMENT_QUEUE_URL/,
+      )
+      expect(() =>
+        loadConfig({
+          ...base,
+          AUCTION_SETTLEMENT_QUEUE_DRIVER: 'sqs',
+          AUCTION_SETTLEMENT_QUEUE_URL: 'https://sqs.us-east-1.amazonaws.com/1/settlement',
+        }),
+      ).toThrow(/AWS_REGION/)
+    })
+  })
   it('aplica valores por defecto seguros para el entorno local', () => {
     const config = loadConfig({})
 

@@ -51,6 +51,8 @@ export interface CatalogNotificationsConfig {
    * de Catalog.
    */
   readonly lifecycleQueueDriver: QueueDriver
+  readonly auctionSettlementQueueUrl: string | null
+  readonly auctionSettlementQueueDriver: QueueDriver
 
   /**
    * Resolucion real de propietarios contra Player-Inventory.
@@ -392,6 +394,27 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       QueueDriver.Memory,
     )
 
+    const auctionSettlementQueueUrl = readString(env, 'AUCTION_SETTLEMENT_QUEUE_URL', '') || null
+    const auctionSettlementQueueDriver = readEnum(
+      env,
+      'AUCTION_SETTLEMENT_QUEUE_DRIVER',
+      [QueueDriver.Memory, QueueDriver.Sqs],
+      QueueDriver.Memory,
+    )
+
+    if (auctionSettlementQueueDriver === QueueDriver.Sqs) {
+      if (auctionSettlementQueueUrl === null) {
+        throw new ConfigurationError(
+          'AUCTION_SETTLEMENT_QUEUE_URL es obligatorio cuando AUCTION_SETTLEMENT_QUEUE_DRIVER es "sqs".',
+        )
+      }
+      if (awsRegion === null || awsRegion === '') {
+        throw new ConfigurationError(
+          'AWS_REGION es obligatorio cuando AUCTION_SETTLEMENT_QUEUE_DRIVER es "sqs".',
+        )
+      }
+    }
+
     if (lifecycleQueueDriver === QueueDriver.Sqs) {
       if (lifecycleQueueUrl === null) {
         throw new ConfigurationError(
@@ -445,6 +468,8 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       cognitoClientId,
       lifecycleQueueUrl,
       lifecycleQueueDriver,
+      auctionSettlementQueueUrl,
+      auctionSettlementQueueDriver,
       playerInventory: readPlayerInventoryConfig(env),
       auctionOutbid,
     }

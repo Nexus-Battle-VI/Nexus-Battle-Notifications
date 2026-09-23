@@ -268,6 +268,8 @@ while (state.running) {
     const catalogSummary = await catalogCreatedConsumer.processBatch()
 
     const lifecycleSummary = await catalogNotificationsApp?.lifecycleEventsConsumer.processBatch()
+    const auctionSettlementSummary =
+      await catalogNotificationsApp?.auctionSettlementEventsConsumer.processBatch()
 
     state.lastPollSucceeded = true
 
@@ -287,6 +289,10 @@ while (state.running) {
       app.logger.info('catalog_lifecycle_events_batch_processed', {
         ...lifecycleSummary,
       })
+    }
+
+    if (auctionSettlementSummary !== undefined && auctionSettlementSummary.received > 0) {
+      app.logger.info('auction_settlement_events_batch_processed', auctionSettlementSummary)
     }
   } catch (error: unknown) {
     state.lastPollSucceeded = false

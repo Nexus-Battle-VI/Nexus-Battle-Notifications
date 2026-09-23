@@ -8,6 +8,7 @@ import { MongoBannerRepository } from '../../src/adapters/persistence/MongoBanne
 import { CatalogNotification } from '../../src/domain/entities/CatalogNotification.js'
 import { CatalogChangeType } from '../../src/domain/entities/CatalogChangeType.js'
 import { BannerEntry } from '../../src/domain/entities/BannerEntry.js'
+import { HandleAuctionSettledEvent } from '../../src/application/use-cases/HandleAuctionSettledEvent.js'
 
 const NOW = new Date('2026-09-06T00:00:00.000Z')
 
@@ -84,6 +85,43 @@ describe('Persistencia Mongo de HU-38 (notificaciones y banner)', () => {
     const history = await repo.findHistoryForPlayer('jugador-a')
     expect(history).toHaveLength(1)
     expect(history[0]?.readStatus).toBe('READ')
+  })
+
+  it('HU-65.6: _id determinista persiste settlement y un handler/repository nuevo absorbe replay', async () => {
+    const firstRepository = new MongoCatalogNotificationRepository(db)
+    const event = {
+      eventId: 'auction-settled-event',
+      eventType: 'auction.settled' as const,
+      eventVersion: 1 as const,
+      aggregateId: 'auction-settled',
+      occurredAt: NOW.toISOString(),
+      producer: 'auction' as const,
+      correlationId: 'settlement',
+      data: {
+        auctionId: 'auction-settled',
+        productId: 'product-settled',
+        sellerId: 'seller-settled',
+        resultType: 'WITHOUT_BIDS' as const,
+        settledAt: NOW.toISOString(),
+      },
+    }
+    await new HandleAuctionSettledEvent({
+      notifications: firstRepository,
+      clock: { now: (): Date => NOW },
+    }).execute(event)
+    const id = 'auction:auction-settled:settled:seller:seller-settled'
+    expect(await firstRepository.findById(id)).toMatchObject({
+      id,
+      sourceEventId: event.eventId,
+      sourceEventType: 'auction.settled.v1',
+    })
+    const secondRepository = new MongoCatalogNotificationRepository(db)
+    await expect(
+      new HandleAuctionSettledEvent({
+        notifications: secondRepository,
+        clock: { now: (): Date => NOW },
+      }).execute(event),
+    ).resolves.toEqual({ created: 0, duplicated: 1 })
   })
 
   it('GlobalNotificationReceipt: marcar como leida es idempotente y no afecta a otro jugador', async () => {
