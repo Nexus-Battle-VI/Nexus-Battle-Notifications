@@ -8,6 +8,7 @@ import { buildCatalogNotificationsApplication } from './infrastructure/bootstrap
 import { HandleCatalogProductCreatedInApp } from './application/use-cases/HandleCatalogProductCreatedInApp.js'
 import { HandleCatalogProductCreatedNotifications } from './application/use-cases/HandleCatalogProductCreatedNotifications.js'
 import { CreateAuctionOutbidNotification } from './application/use-cases/CreateAuctionOutbidNotification.js'
+import { CreateAuctionClosedByBuyNowNotification } from './application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { CatalogProductEventsConsumer } from './adapters/messaging/CatalogProductEventsConsumer.js'
 import { SystemClock } from './adapters/clock/SystemClock.js'
 import { createAuctionOutbidServer } from './infrastructure/http/auction-outbid-server.js'
@@ -55,6 +56,12 @@ const auctionOutbidServer =
         port: auctionOutbidConfig.port,
         sharedSecret: auctionOutbidConfig.secret,
         useCase: new CreateAuctionOutbidNotification({
+          notifications: catalogNotificationsApp.notifications,
+          idempotencyStore: catalogNotificationsApp.idempotencyStore,
+          clock: new SystemClock(),
+          idempotencyTtlMs: config.idempotencyTtlMs,
+        }),
+        closedByBuyNowUseCase: new CreateAuctionClosedByBuyNowNotification({
           notifications: catalogNotificationsApp.notifications,
           idempotencyStore: catalogNotificationsApp.idempotencyStore,
           clock: new SystemClock(),

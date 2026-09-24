@@ -20,6 +20,7 @@ export const CatalogChangeType = {
    * una nueva puja valida desplazo al jugador como lider de una subasta.
    */
   AuctionBidOutbid: 'AUCTION_BID_OUTBID',
+  AuctionClosedByBuyNow: 'AUCTION_CLOSED_BY_BUY_NOW',
   AuctionSettledSeller: 'AUCTION_SETTLED_SELLER',
   AuctionSettledWinner: 'AUCTION_SETTLED_WINNER',
   AuctionSettledLoser: 'AUCTION_SETTLED_LOSER',

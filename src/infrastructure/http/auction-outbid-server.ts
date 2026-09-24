@@ -8,6 +8,11 @@ import {
   AuctionOutbidNotificationOutcome,
   type CreateAuctionOutbidNotification,
 } from '../../application/use-cases/CreateAuctionOutbidNotification.js'
+import {
+  InvalidAuctionClosedByBuyNowNotificationError,
+  parseAuctionClosedByBuyNowNotification,
+} from '../../application/dto/AuctionClosedByBuyNowNotification.js'
+import type { CreateAuctionClosedByBuyNowNotification } from '../../application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { DomainError } from '../../domain/errors/DomainError.js'
 import {
   INTERNAL_CLOCK_SKEW_MS,
@@ -18,6 +23,8 @@ import {
 import type { Logger } from '../observability/logger.js'
 
 export const AUCTION_OUTBID_PATH = '/api/internal/v1/notifications/auction/outbid'
+export const AUCTION_CLOSED_BY_BUY_NOW_PATH =
+  '/api/internal/v1/notifications/auction/closed-by-buy-now'
 
 export const MAX_AUCTION_OUTBID_BODY_BYTES = 64 * 1024
 
@@ -25,6 +32,7 @@ export interface AuctionOutbidServerOptions {
   readonly port: number
   readonly sharedSecret: string
   readonly useCase: CreateAuctionOutbidNotification
+  readonly closedByBuyNowUseCase?: CreateAuctionClosedByBuyNowNotification
   readonly logger: Logger
 }
 
@@ -82,7 +90,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
     void (async (): Promise<void> => {
       const path = (request.url ?? '/').split('?')[0] ?? '/'
 
-      if (path !== AUCTION_OUTBID_PATH) {
+      if (path !== AUCTION_OUTBID_PATH && path !== AUCTION_CLOSED_BY_BUY_NOW_PATH) {
         respond(404, {
           error: 'not_found',
         })
@@ -95,6 +103,8 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         })
         return
       }
+
+      const isClosedByBuyNow = path === AUCTION_CLOSED_BY_BUY_NOW_PATH
 
       try {
         const raw = await readBody(request)
@@ -123,14 +133,19 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
             signInternalRequest(options.sharedSecret, {
               service: receivedService,
               method: 'POST',
-              path: AUCTION_OUTBID_PATH,
+              path,
               timestamp: receivedTimestamp,
               body,
             }),
             receivedSignature,
           )
         ) {
-          options.logger.warn('auction_outbid_unauthorized', {})
+          options.logger.warn(
+            isClosedByBuyNow
+              ? 'auction_closed_by_buy_now_unauthorized'
+              : 'auction_outbid_unauthorized',
+            {},
+          )
 
           respond(401, {
             error: 'unauthorized',
@@ -139,23 +154,34 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           return
         }
 
+        if (isClosedByBuyNow) {
+          if (options.closedByBuyNowUseCase === undefined)
+            throw new Error('closed_by_buy_now_unavailable')
+          const command = parseAuctionClosedByBuyNowNotification(body)
+          const result = await options.closedByBuyNowUseCase.execute(command)
+          options.logger.info('auction_closed_by_buy_now_notification_accepted', {
+            notificationId: result.notificationId,
+            outcome: result.outcome,
+            auctionId: command.auctionId,
+            recipientId: command.recipientId,
+            transactionId: command.transactionId,
+          })
+          respond(result.outcome === 'created' ? 201 : 200, {
+            notificationId: result.notificationId,
+            status: result.outcome,
+          })
+          return
+        }
         const command = parseAuctionBidOutbidNotification(body)
-
         const result = await options.useCase.execute(command)
-
         const status = result.outcome === AuctionOutbidNotificationOutcome.Created ? 201 : 200
-
         options.logger.info('auction_outbid_notification_accepted', {
           notificationId: result.notificationId,
           outcome: result.outcome,
           auctionId: command.auctionId,
           recipientPlayerId: command.recipientPlayerId,
         })
-
-        respond(status, {
-          notificationId: result.notificationId,
-          status: result.outcome,
-        })
+        respond(status, { notificationId: result.notificationId, status: result.outcome })
       } catch (error: unknown) {
         if (error instanceof PayloadTooLargeError) {
           respond(413, {
@@ -167,18 +193,30 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         if (
           error instanceof SyntaxError ||
           error instanceof InvalidAuctionBidOutbidNotificationError ||
+          error instanceof InvalidAuctionClosedByBuyNowNotificationError ||
           error instanceof DomainError
         ) {
           respond(400, {
-            error: 'invalid_outbid_notification',
+            error: isClosedByBuyNow
+              ? 'invalid_auction_closed_by_buy_now_notification'
+              : 'invalid_outbid_notification',
             message: error.message,
           })
           return
         }
+        if (error instanceof Error && error.message === 'operation_conflict') {
+          respond(409, { error: 'operation_conflict' })
+          return
+        }
 
-        options.logger.warn('auction_outbid_notification_pending', {
-          reason: error instanceof Error ? error.message : 'Fallo desconocido.',
-        })
+        options.logger.warn(
+          isClosedByBuyNow
+            ? 'auction_closed_by_buy_now_notification_pending'
+            : 'auction_outbid_notification_pending',
+          {
+            reason: error instanceof Error ? error.message : 'Fallo desconocido.',
+          },
+        )
 
         /*
          * Auction ya confirmo la puja.
