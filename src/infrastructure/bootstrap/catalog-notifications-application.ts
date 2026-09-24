@@ -8,6 +8,8 @@ import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIde
 import { InMemoryMessageQueue } from '../../adapters/messaging/InMemoryMessageQueue.js'
 import { SqsMessageQueue } from '../../adapters/messaging/SqsMessageQueue.js'
 import { CatalogLifecycleEventsConsumer } from '../../adapters/messaging/CatalogLifecycleEventsConsumer.js'
+import { AuctionSettlementEventsConsumer } from '../../adapters/messaging/AuctionSettlementEventsConsumer.js'
+import { HandleAuctionSettledEvent } from '../../application/use-cases/HandleAuctionSettledEvent.js'
 import { MongoCatalogNotificationRepository } from '../../adapters/persistence/MongoCatalogNotificationRepository.js'
 import { MongoGlobalNotificationReceiptRepository } from '../../adapters/persistence/MongoGlobalNotificationReceiptRepository.js'
 import { MongoBannerRepository } from '../../adapters/persistence/MongoBannerRepository.js'
@@ -37,6 +39,7 @@ export interface CatalogNotificationsApplication {
   readonly lifecycleEventsConsumer: CatalogLifecycleEventsConsumer
   /** Cola sobre la que corre `lifecycleEventsConsumer`. Expuesta por el mismo motivo que `catalogQueue` en composition-root.ts: verificar desde fuera que el transporte elegido es el correcto y que no se comparte con otras colas. */
   readonly lifecycleQueue: MessageQueuePort
+  readonly auctionSettlementEventsConsumer: AuctionSettlementEventsConsumer
   /** Repositorio compartido con el consumidor in-app de `catalog.product.created` (ver worker.ts). */
   readonly notifications: CatalogNotificationRepositoryPort
   readonly idempotencyStore: InMemoryIdempotencyStore
@@ -185,6 +188,20 @@ export const buildCatalogNotificationsApplication = async (
     batchSize: config.batchSize,
   })
 
+  const auctionSettlementQueue: InMemoryMessageQueue | SqsMessageQueue =
+    catalogNotifications.auctionSettlementQueueDriver === QueueDriver.Sqs
+      ? new SqsMessageQueue({
+          client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
+          queueUrl: catalogNotifications.auctionSettlementQueueUrl ?? '',
+        })
+      : new InMemoryMessageQueue(() => clock.now().getTime())
+  const auctionSettlementEventsConsumer = new AuctionSettlementEventsConsumer({
+    queue: auctionSettlementQueue,
+    useCase: new HandleAuctionSettledEvent({ notifications, clock }),
+    logger,
+    batchSize: config.batchSize,
+  })
+
   const getPlayerNotifications = new GetPlayerNotifications({ notifications, globalReceipts })
   const markNotificationsRead = new MarkNotificationsRead({ notifications, globalReceipts, clock })
   const createBannerEntry = new CreateBannerEntry({ banners, clock })
@@ -207,6 +224,7 @@ export const buildCatalogNotificationsApplication = async (
     server,
     lifecycleEventsConsumer,
     lifecycleQueue,
+    auctionSettlementEventsConsumer,
     notifications,
     idempotencyStore,
     close: async (): Promise<void> => {
