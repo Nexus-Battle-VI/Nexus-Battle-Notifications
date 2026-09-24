@@ -12,12 +12,18 @@ export const CatalogChangeType = {
   ProductSuspended: 'PRODUCT_SUSPENDED',
   ProductReactivated: 'PRODUCT_REACTIVATED',
   ProductPremiumConfigured: 'PRODUCT_PREMIUM_CONFIGURED',
+  AuctionChanged: 'AUCTION_CHANGED',
+  AuctionClosingSoon: 'AUCTION_CLOSING_SOON',
 
   /**
    * HU-63 CA-05:
    * una nueva puja valida desplazo al jugador como lider de una subasta.
    */
   AuctionBidOutbid: 'AUCTION_BID_OUTBID',
+  AuctionSettledSeller: 'AUCTION_SETTLED_SELLER',
+  AuctionSettledWinner: 'AUCTION_SETTLED_WINNER',
+  AuctionSettledLoser: 'AUCTION_SETTLED_LOSER',
+  AuctionSettledWithoutBids: 'AUCTION_SETTLED_WITHOUT_BIDS',
 } as const
 
 export type CatalogChangeType = (typeof CatalogChangeType)[keyof typeof CatalogChangeType]

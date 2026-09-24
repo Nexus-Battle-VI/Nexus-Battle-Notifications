@@ -40,23 +40,42 @@ export interface CatalogNotificationsConfig {
   readonly databaseName: string
   readonly cognitoUserPoolId: string
   readonly cognitoClientId: string
-
+  /** Secreto HMAC para aceptar eventos internos emitidos por Auction. */
+  readonly internalSharedSecret: string | null
   /**
-   * `null` cuando no hay cola dedicada configurada.
+   * `null` cuando no hay cola dedicada configurada. El consumidor sigue
+   * existiendo y puede ejercitarse en memoria; solo carece de una cola SQS
+   * real que alimentarlo.
    */
   readonly lifecycleQueueUrl: string | null
-
   /**
-   * Transporte dedicado para eventos de ciclo de vida
-   * de Catalog.
+   * Transporte de los cuatro eventos de ciclo de vida
+   * (suspended/reactivated/inventory.adjusted/premium.configured),
+   * independiente de `queueDriver` (cola general) y de `catalogQueueDriver`
+   * (`catalog.product.created`).
+   *
+   * ADR-018 (Infrastructure, Accepted) aprobo una cola SQS COMPARTIDA para
+   * estos cuatro eventos, distinta de la de `created` y de la general, con la
+   * condicion explicita de no mezclarlas. Antes de esta variable,
+   * `lifecycleQueue` se activaba con `queueDriver === 'sqs'` -el interruptor
+   * de la cola general- y reenviaba a `deadLetterQueueUrl` -la DLQ general-,
+   * exactamente el mismo acoplamiento que `catalogQueueDriver` ya resolvio
+   * para `created`. Vive aqui, dentro de `CatalogNotificationsConfig` y no en
+   * `AppConfig`, porque `lifecycleQueueUrl` (arriba) ya vivia aqui: es el
+   * lugar arquitectonicamente equivalente, no uno nuevo.
    */
   readonly lifecycleQueueDriver: QueueDriver
-
+  readonly auctionSettlementQueueUrl: string | null
+  readonly auctionSettlementQueueDriver: QueueDriver
   /**
-   * Resolucion real de propietarios contra Player-Inventory.
+   * Resolución real de propietarios (HU-38, TASK #175) contra
+   * `Nexus-Battle-Player-Inventory#23`. `null` cuando falta
+   * `PLAYER_INVENTORY_BASE_URL` o `INTERNAL_SERVICE_AUTH_SECRET`: la
+   * composición cae entonces en `UnavailableProductOwnersResolver` -fail
+   * closed, nunca se inventa un destinatario ni se usa audiencia GLOBAL como
+   * sustituto-.
    */
   readonly playerInventory: PlayerInventoryConfig | null
-
   /**
    * HU-63.5.
    *
@@ -74,9 +93,7 @@ export interface PlayerInventoryConfig {
 
 export interface AppConfig {
   readonly purchase: PurchaseConfig | null
-
   readonly catalogNotifications: CatalogNotificationsConfig | null
-
   readonly nodeEnv: 'development' | 'test' | 'production'
 
   readonly serviceName: string
@@ -106,9 +123,18 @@ export interface AppConfig {
   readonly queueUrl: string | null
 
   readonly deadLetterQueueUrl: string | null
-
+  /**
+   * Transporte de `catalog.product.created`, independiente de `queueDriver`.
+   *
+   * ADR-017 (Infrastructure) aprobo SQS unicamente para este evento: no
+   * aprobo migrar la cola general (`account.registered`/`verified`, compras)
+   * a SQS. Antes de esta variable, activar SQS para Catalog exigia tambien
+   * `queueDriver === 'sqs'`, que a su vez exige `QUEUE_URL` de la cola
+   * general -sin ella `loadConfig` rechazaba el arranque completo del
+   * worker-. Separar el interruptor deja que Infrastructure#93 (cola
+   * dedicada) se active sola.
+   */
   readonly catalogQueueDriver: QueueDriver
-
   readonly catalogQueueUrl: string | null
 
   readonly awsRegion: string | null
@@ -192,9 +218,18 @@ const readBoolean = (env: RawEnv, key: string, fallback: boolean): boolean => {
   return raw === 'true'
 }
 
+/**
+ * `null` si falta `PLAYER_INVENTORY_BASE_URL` o `INTERNAL_SERVICE_AUTH_SECRET`:
+ * ambos son opcionales a proposito (fail closed, no un error de arranque). Sin
+ * ellos, la composicion usa `UnavailableProductOwnersResolver` -el mismo
+ * comportamiento seguro que existia antes de esta integracion-, en vez de
+ * bloquear un despliegue de `CATALOG_NOTIFICATIONS_HTTP_ENABLED=true` que
+ * todavia no conoce Player-Inventory. Se reexamina `INTERNAL_SERVICE_AUTH_SECRET`
+ * aqui en vez de reutilizar el de `purchase`: cada subsistema opcional lee del
+ * entorno lo que necesita, igual que ya hace `PURCHASE_HTTP_ENABLED`.
+ */
 const readPlayerInventoryConfig = (env: RawEnv): PlayerInventoryConfig | null => {
   const baseUrl = readString(env, 'PLAYER_INVENTORY_BASE_URL', '')
-
   const secret = readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '')
 
   if (baseUrl === '' || secret === '') {
@@ -208,6 +243,14 @@ const readPlayerInventoryConfig = (env: RawEnv): PlayerInventoryConfig | null =>
   }
 }
 
+/**
+ * Construye la configuracion a partir del entorno. Es una funcion pura sobre
+ * `env`: no lee `process.env` directamente, de modo que puede verificarse
+ * completa sin contaminar el proceso de pruebas.
+ *
+ * Falla de inmediato ante una configuracion invalida. Un worker mal configurado
+ * no debe arrancar y aparentar salud.
+ */
 export const loadConfig = (env: RawEnv): AppConfig => {
   const nodeEnv = readEnum(
     env,
@@ -238,6 +281,14 @@ export const loadConfig = (env: RawEnv): AppConfig => {
 
   const awsRegion = env['AWS_REGION'] ?? null
 
+  /**
+   * `CATALOG_QUEUE_DRIVER` es EXPLICITO y no se infiere de la presencia de
+   * `CATALOG_QUEUE_URL`: este repositorio no activa adaptadores por la
+   * presencia accidental de una variable (mismo criterio que
+   * `CATALOG_NOTIFICATIONS_HTTP_ENABLED`, que tampoco se infiere de
+   * `MONGO_URL`). `memory` por defecto preserva el comportamiento local
+   * existente sin exigir ningun cambio a quien no use Catalog por SQS.
+   */
   const catalogQueueDriver = readEnum(
     env,
     'CATALOG_QUEUE_DRIVER',
@@ -288,7 +339,6 @@ export const loadConfig = (env: RawEnv): AppConfig => {
   const retryBaseDelayMs = readInteger(env, 'RETRY_BASE_DELAY_MS', 1_000, 0, 600_000)
 
   const retryMaxDelayMs = readInteger(env, 'RETRY_MAX_DELAY_MS', 60_000, 0, 3_600_000)
-
   let purchase: PurchaseConfig | null = null
 
   if (readBoolean(env, 'PURCHASE_HTTP_ENABLED', false)) {
@@ -392,6 +442,27 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       QueueDriver.Memory,
     )
 
+    const auctionSettlementQueueUrl = readString(env, 'AUCTION_SETTLEMENT_QUEUE_URL', '') || null
+    const auctionSettlementQueueDriver = readEnum(
+      env,
+      'AUCTION_SETTLEMENT_QUEUE_DRIVER',
+      [QueueDriver.Memory, QueueDriver.Sqs],
+      QueueDriver.Memory,
+    )
+
+    if (auctionSettlementQueueDriver === QueueDriver.Sqs) {
+      if (auctionSettlementQueueUrl === null) {
+        throw new ConfigurationError(
+          'AUCTION_SETTLEMENT_QUEUE_URL es obligatorio cuando AUCTION_SETTLEMENT_QUEUE_DRIVER es "sqs".',
+        )
+      }
+      if (awsRegion === null || awsRegion === '') {
+        throw new ConfigurationError(
+          'AWS_REGION es obligatorio cuando AUCTION_SETTLEMENT_QUEUE_DRIVER es "sqs".',
+        )
+      }
+    }
+
     if (lifecycleQueueDriver === QueueDriver.Sqs) {
       if (lifecycleQueueUrl === null) {
         throw new ConfigurationError(
@@ -443,8 +514,11 @@ export const loadConfig = (env: RawEnv): AppConfig => {
       databaseName: readString(env, 'MONGO_DB_NAME', 'notifications'),
       cognitoUserPoolId,
       cognitoClientId,
+      internalSharedSecret: readString(env, 'INTERNAL_SERVICE_AUTH_SECRET', '') || null,
       lifecycleQueueUrl,
       lifecycleQueueDriver,
+      auctionSettlementQueueUrl,
+      auctionSettlementQueueDriver,
       playerInventory: readPlayerInventoryConfig(env),
       auctionOutbid,
     }
@@ -464,7 +538,6 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     nodeEnv,
     purchase,
     catalogNotifications,
-
     serviceName: readString(env, 'SERVICE_NAME', 'nexus-battle-notifications'),
 
     version: readString(env, 'SERVICE_VERSION', '0.1.0'),
@@ -496,9 +569,7 @@ export const loadConfig = (env: RawEnv): AppConfig => {
     queueUrl: queueUrl === '' ? null : queueUrl,
 
     deadLetterQueueUrl: deadLetterQueueUrl === '' ? null : deadLetterQueueUrl,
-
     catalogQueueDriver,
-
     catalogQueueUrl: catalogQueueUrl === '' ? null : catalogQueueUrl,
 
     awsRegion: awsRegion === '' ? null : awsRegion,

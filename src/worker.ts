@@ -29,8 +29,14 @@ const purchaseServer =
     : null
 
 /**
- * HU-38:
- * notificaciones in-app + banner.
+ * HU-38: notificaciones in-app + banner. Subsistema opcional, igual que
+ * ingesta y compras (`CATALOG_NOTIFICATIONS_HTTP_ENABLED`).
+ *
+ * Cuando esta activo, `catalog.product.created` gana una SEGUNDA reaccion
+ * -in-app, ademas del correo heredado de HU-33.10- compuesta sobre el MISMO
+ * consumidor (`app.catalogQueue`/`app.catalogUseCase`): dos consumidores
+ * separados sondeando la misma cola competirian por el mismo mensaje en vez
+ * de recibirlo los dos. Ver HandleCatalogProductCreatedNotifications.ts.
  */
 const catalogNotificationsApp = await buildCatalogNotificationsApplication(config, app.logger)
 
@@ -47,48 +53,30 @@ const auctionOutbidServer =
   catalogNotificationsApp !== null && auctionOutbidConfig !== null
     ? createAuctionOutbidServer({
         port: auctionOutbidConfig.port,
-
         sharedSecret: auctionOutbidConfig.secret,
-
         useCase: new CreateAuctionOutbidNotification({
           notifications: catalogNotificationsApp.notifications,
-
           idempotencyStore: catalogNotificationsApp.idempotencyStore,
-
           clock: new SystemClock(),
-
           idempotencyTtlMs: config.idempotencyTtlMs,
         }),
-
         logger: app.logger,
       })
     : null
 
-/**
- * HU-38:
- * catalog.product.created produce correo + notificacion in-app
- * usando el mismo mensaje de la cola.
- */
 const catalogCreatedConsumer =
   catalogNotificationsApp === null
     ? app.catalogEventsConsumer
     : new CatalogProductEventsConsumer({
         queue: app.catalogQueue,
-
         logger: app.logger,
-
         batchSize: config.batchSize,
-
         useCase: new HandleCatalogProductCreatedNotifications({
           emailUseCase: app.catalogUseCase,
-
           inAppUseCase: new HandleCatalogProductCreatedInApp({
             notifications: catalogNotificationsApp.notifications,
-
             idempotencyStore: catalogNotificationsApp.idempotencyStore,
-
             clock: new SystemClock(),
-
             idempotencyTtlMs: config.idempotencyTtlMs,
           }),
         }),
@@ -113,37 +101,14 @@ const healthServer = createHealthServer({
   },
 
   readinessChecks: [
-    {
-      name: 'consumer',
-
-      check: (): boolean => state.running,
-    },
-
-    {
-      name: 'queue',
-
-      check: (): boolean => state.lastPollSucceeded,
-    },
-
+    { name: 'consumer', check: (): boolean => state.running },
+    { name: 'queue', check: (): boolean => state.lastPollSucceeded },
     ...(purchaseApp === null
       ? []
-      : [
-          {
-            name: 'purchase-inbox',
-
-            check: (): boolean => state.purchaseReady,
-          },
-        ]),
-
+      : [{ name: 'purchase-inbox', check: (): boolean => state.purchaseReady }]),
     ...(catalogNotificationsApp === null
       ? []
-      : [
-          {
-            name: 'catalog-notifications',
-
-            check: (): boolean => state.catalogNotificationsReady,
-          },
-        ]),
+      : [{ name: 'catalog-notifications', check: (): boolean => state.catalogNotificationsReady }]),
   ],
 
   ...(config.nodeEnv === 'development'
@@ -194,21 +159,17 @@ const shutdown = (signal: string): void => {
   })
 
   ingestServer?.close()
-
   auctionOutbidServer?.close()
-
   purchaseServer?.close(() => {
     void purchaseApp?.close().catch(() => {
       app.logger.error('purchase_inbox_close_failed')
     })
   })
-
   catalogNotificationsApp?.server.close(() => {
     void catalogNotificationsApp.close().catch(() => {
       app.logger.error('catalog_notifications_close_failed')
     })
   })
-
   healthServer.close(() => {
     app.logger.info('worker_stopped')
   })
@@ -226,11 +187,8 @@ app.logger.info('worker_started', {
   emailDriver: config.emailDriver,
 
   queueDriver: config.queueDriver,
-
   catalogQueueDriver: config.catalogQueueDriver,
-
   catalogLifecycleQueueDriver: config.catalogNotifications?.lifecycleQueueDriver ?? null,
-
   ingestEnabled: config.ingestEnabled,
 
   auctionOutbidEnabled: auctionOutbidServer !== null,
@@ -248,7 +206,6 @@ while (state.running) {
       state.purchaseReady = false
     }
   }
-
   if (catalogNotificationsApp !== null) {
     try {
       state.catalogNotificationsReady = await catalogNotificationsApp.ready()
@@ -256,18 +213,27 @@ while (state.running) {
       state.catalogNotificationsReady = false
     }
   }
-
-  /*
-   * Los consumidores conservan el comportamiento existente:
-   * general, catalog.product.created y lifecycle se procesan
-   * secuencialmente dentro de la iteracion del worker.
+  /**
+   * DEUDA TECNICA CONOCIDA, sin resolver en esta corrección: los tres
+   * consumidores (general, catalog.product.created, lifecycle) comparten un
+   * unico try/catch y un unico `state.lastPollSucceeded`. Antes de separar
+   * `queueDriver` de `catalogQueueDriver`, esto ya era asi -no lo introduce
+   * este cambio-, pero ahora es mas consecuente: un fallo transitorio de la
+   * cola GENERAL (memoria o SQS) impide que `catalogCreatedConsumer` corra
+   * siquiera en esta iteracion -el `await` es secuencial dentro del mismo
+   * bloque- y marca el readiness `queue` como no-listo aunque la cola dedicada
+   * de Catalog (ADR-017) este perfectamente sana, y viceversa. Separar esto en
+   * `generalQueueReady`/`catalogQueueReady`/`lifecycleQueueReady` con un
+   * try/catch por consumidor es un cambio razonable, pero amplia el alcance de
+   * esta corrección -que es desacoplar el TRANSPORTE, no la observabilidad-;
+   * queda como trabajo de seguimiento, no oculto.
    */
   try {
     const summary = await app.consumer.processBatch()
-
     const catalogSummary = await catalogCreatedConsumer.processBatch()
-
     const lifecycleSummary = await catalogNotificationsApp?.lifecycleEventsConsumer.processBatch()
+    const auctionSettlementSummary =
+      await catalogNotificationsApp?.auctionSettlementEventsConsumer.processBatch()
 
     state.lastPollSucceeded = true
 
@@ -287,6 +253,10 @@ while (state.running) {
       app.logger.info('catalog_lifecycle_events_batch_processed', {
         ...lifecycleSummary,
       })
+    }
+
+    if (auctionSettlementSummary !== undefined && auctionSettlementSummary.received > 0) {
+      app.logger.info('auction_settlement_events_batch_processed', auctionSettlementSummary)
     }
   } catch (error: unknown) {
     state.lastPollSucceeded = false
