@@ -8,6 +8,8 @@ import { InMemoryIdempotencyStore } from '../../adapters/idempotency/InMemoryIde
 import { InMemoryMessageQueue } from '../../adapters/messaging/InMemoryMessageQueue.js'
 import { SqsMessageQueue } from '../../adapters/messaging/SqsMessageQueue.js'
 import { CatalogLifecycleEventsConsumer } from '../../adapters/messaging/CatalogLifecycleEventsConsumer.js'
+import { AuctionSettlementEventsConsumer } from '../../adapters/messaging/AuctionSettlementEventsConsumer.js'
+import { HandleAuctionSettledEvent } from '../../application/use-cases/HandleAuctionSettledEvent.js'
 import { MongoCatalogNotificationRepository } from '../../adapters/persistence/MongoCatalogNotificationRepository.js'
 import { MongoGlobalNotificationReceiptRepository } from '../../adapters/persistence/MongoGlobalNotificationReceiptRepository.js'
 import { MongoBannerRepository } from '../../adapters/persistence/MongoBannerRepository.js'
@@ -23,6 +25,7 @@ import { GetPlayerNotifications } from '../../application/use-cases/GetPlayerNot
 import { MarkNotificationsRead } from '../../application/use-cases/MarkNotificationsRead.js'
 import { CreateBannerEntry } from '../../application/use-cases/CreateBannerEntry.js'
 import { ListBanners } from '../../application/use-cases/ListBanners.js'
+import { HandleAuctionWatchlistEvent } from '../../application/use-cases/HandleAuctionWatchlistEvent.js'
 import type { CatalogNotificationRepositoryPort } from '../../application/ports/CatalogNotificationRepositoryPort.js'
 import type { GlobalNotificationReceiptRepositoryPort } from '../../application/ports/GlobalNotificationReceiptRepositoryPort.js'
 import type { BannerRepositoryPort } from '../../application/ports/BannerRepositoryPort.js'
@@ -36,6 +39,7 @@ export interface CatalogNotificationsApplication {
   readonly lifecycleEventsConsumer: CatalogLifecycleEventsConsumer
   /** Cola sobre la que corre `lifecycleEventsConsumer`. Expuesta por el mismo motivo que `catalogQueue` en composition-root.ts: verificar desde fuera que el transporte elegido es el correcto y que no se comparte con otras colas. */
   readonly lifecycleQueue: MessageQueuePort
+  readonly auctionSettlementEventsConsumer: AuctionSettlementEventsConsumer
   /** Repositorio compartido con el consumidor in-app de `catalog.product.created` (ver worker.ts). */
   readonly notifications: CatalogNotificationRepositoryPort
   readonly idempotencyStore: InMemoryIdempotencyStore
@@ -184,10 +188,25 @@ export const buildCatalogNotificationsApplication = async (
     batchSize: config.batchSize,
   })
 
+  const auctionSettlementQueue: InMemoryMessageQueue | SqsMessageQueue =
+    catalogNotifications.auctionSettlementQueueDriver === QueueDriver.Sqs
+      ? new SqsMessageQueue({
+          client: SqsMessageQueue.createClient(config.awsRegion ?? ''),
+          queueUrl: catalogNotifications.auctionSettlementQueueUrl ?? '',
+        })
+      : new InMemoryMessageQueue(() => clock.now().getTime())
+  const auctionSettlementEventsConsumer = new AuctionSettlementEventsConsumer({
+    queue: auctionSettlementQueue,
+    useCase: new HandleAuctionSettledEvent({ notifications, clock }),
+    logger,
+    batchSize: config.batchSize,
+  })
+
   const getPlayerNotifications = new GetPlayerNotifications({ notifications, globalReceipts })
   const markNotificationsRead = new MarkNotificationsRead({ notifications, globalReceipts, clock })
   const createBannerEntry = new CreateBannerEntry({ banners, clock })
   const listBanners = new ListBanners({ banners, clock })
+  const handleAuctionWatchlistEvent = new HandleAuctionWatchlistEvent(notifications, clock)
 
   const server = createCatalogNotificationsServer({
     port: catalogNotifications.port,
@@ -196,6 +215,8 @@ export const buildCatalogNotificationsApplication = async (
     markNotificationsRead,
     createBannerEntry,
     listBanners,
+    handleAuctionWatchlistEvent,
+    internalSharedSecret: catalogNotifications.internalSharedSecret,
     logger,
   })
 
@@ -203,6 +224,7 @@ export const buildCatalogNotificationsApplication = async (
     server,
     lifecycleEventsConsumer,
     lifecycleQueue,
+    auctionSettlementEventsConsumer,
     notifications,
     idempotencyStore,
     close: async (): Promise<void> => {
