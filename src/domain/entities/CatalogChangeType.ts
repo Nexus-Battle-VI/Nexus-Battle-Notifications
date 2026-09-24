@@ -12,6 +12,8 @@ export const CatalogChangeType = {
   ProductSuspended: 'PRODUCT_SUSPENDED',
   ProductReactivated: 'PRODUCT_REACTIVATED',
   ProductPremiumConfigured: 'PRODUCT_PREMIUM_CONFIGURED',
+  AuctionChanged: 'AUCTION_CHANGED',
+  AuctionClosingSoon: 'AUCTION_CLOSING_SOON',
 
   /**
    * HU-63 CA-05:
