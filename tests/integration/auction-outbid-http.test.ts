@@ -9,8 +9,10 @@ import { InMemoryCatalogNotificationRepository } from '../../src/adapters/persis
 import { SystemClock } from '../../src/adapters/clock/SystemClock.js'
 import { CreateAuctionClosedByBuyNowNotification } from '../../src/application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { CreateAuctionOutbidNotification } from '../../src/application/use-cases/CreateAuctionOutbidNotification.js'
+import { CreateAuctionAutoBidLimitReachedNotification } from '../../src/application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
 import { CatalogChangeType } from '../../src/domain/entities/CatalogChangeType.js'
 import {
+  AUCTION_AUTO_BID_LIMIT_REACHED_PATH,
   AUCTION_CLOSED_BY_BUY_NOW_PATH,
   AUCTION_OUTBID_PATH,
   createAuctionOutbidServer,
@@ -476,6 +478,317 @@ describe('HTTP interno - subasta cerrada por compra inmediata', () => {
 
     expect(await response.json()).toEqual({
       notificationId: 'op-regression:outbid',
+      status: 'created',
+    })
+  })
+})
+
+const autoBidLimitPayload = {
+  notificationId: 'operation-67-1:auto-bid-limit-reached',
+  operationId: 'operation-67-1',
+  recipientPlayerId: 'player-auto-bidder',
+  auctionId: 'auction-67-1',
+  autoBidLimitCredits: 500,
+  requiredAmountCredits: 550,
+  leadingBidderId: 'player-new-leader',
+  occurredAt: '2026-09-24T18:00:00.000Z',
+}
+
+describe('HTTP interno - limite de puja automatica alcanzado (HU-67)', () => {
+  let server: Server
+  let url: string
+  let notifications: InMemoryCatalogNotificationRepository
+  const logger = createLogger({
+    level: 'error',
+    service: 'test',
+    version: 'test',
+  })
+
+  beforeAll(async () => {
+    notifications = new InMemoryCatalogNotificationRepository()
+
+    const clock = new SystemClock()
+
+    const idempotencyStore = new InMemoryIdempotencyStore(() => clock.now().getTime())
+
+    const dependencies = {
+      notifications,
+      idempotencyStore,
+      clock,
+      idempotencyTtlMs: 86_400_000,
+    }
+
+    server = createAuctionOutbidServer({
+      port: 0,
+      sharedSecret: secret,
+      useCase: new CreateAuctionOutbidNotification(dependencies),
+      autoBidLimitReachedUseCase: new CreateAuctionAutoBidLimitReachedNotification(dependencies),
+      logger,
+    })
+
+    await once(server, 'listening')
+
+    url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve()
+      })
+    })
+  })
+
+  const post = (
+    body: unknown = autoBidLimitPayload,
+    options: {
+      readonly path?: string
+      readonly service?: string
+      readonly timestamp?: string
+      readonly signature?: string
+    } = {},
+  ): Promise<Response> => {
+    const path = options.path ?? AUCTION_AUTO_BID_LIMIT_REACHED_PATH
+    const service = options.service ?? 'auction'
+    const timestamp = options.timestamp ?? String(Date.now())
+    const signature =
+      options.signature ??
+      signInternalRequest(secret, {
+        service,
+        method: 'POST',
+        path,
+        timestamp,
+        body,
+      })
+
+    return fetch(url + path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-service': service,
+        'x-internal-timestamp': timestamp,
+        'x-internal-signature': signature,
+      },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('A. caller auction con HMAC valido crea la notificacion (201)', async () => {
+    const response = await post()
+
+    expect(response.status).toBe(201)
+
+    expect(await response.json()).toEqual({
+      notificationId: autoBidLimitPayload.notificationId,
+      status: 'created',
+    })
+
+    const stored = await notifications.findById(autoBidLimitPayload.notificationId)
+
+    expect(stored?.changeType).toBe(CatalogChangeType.AuctionAutoBidLimitReached)
+
+    expect(stored?.playerId).toBe(autoBidLimitPayload.recipientPlayerId)
+
+    expect(stored?.description).toContain(autoBidLimitPayload.auctionId)
+
+    expect(stored?.description).toContain(String(autoBidLimitPayload.autoBidLimitCredits))
+
+    expect(stored?.sourceEventType).toBe('auction.auto-bid.limit-reached.v1')
+  })
+
+  it('B. un replay no crea una segunda notificacion', async () => {
+    const response = await post()
+
+    expect(response.status).toBe(200)
+
+    expect(await response.json()).toEqual({
+      notificationId: autoBidLimitPayload.notificationId,
+      status: 'duplicated',
+    })
+
+    expect(
+      await notifications.findHistoryForPlayer(autoBidLimitPayload.recipientPlayerId),
+    ).toHaveLength(1)
+  })
+
+  it('C. rechaza payload invalido', async () => {
+    expect((await post({ ...autoBidLimitPayload, autoBidLimitCredits: 0 })).status).toBe(400)
+
+    expect((await post({ ...autoBidLimitPayload, requiredAmountCredits: -1 })).status).toBe(400)
+  })
+
+  it('D. rechaza request sin firma', async () => {
+    const response = await fetch(url + AUCTION_AUTO_BID_LIMIT_REACHED_PATH, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-service': 'auction',
+        'x-internal-timestamp': String(Date.now()),
+      },
+      body: JSON.stringify(autoBidLimitPayload),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it('E. rechaza firma incorrecta, incluida la firmada con el path de outbid', async () => {
+    expect((await post(autoBidLimitPayload, { signature: 'a'.repeat(64) })).status).toBe(401)
+
+    const timestamp = String(Date.now())
+
+    const outbidPathSignature = signInternalRequest(secret, {
+      service: 'auction',
+      method: 'POST',
+      path: AUCTION_OUTBID_PATH,
+      timestamp,
+      body: autoBidLimitPayload,
+    })
+
+    expect(
+      (await post(autoBidLimitPayload, { timestamp, signature: outbidPathSignature })).status,
+    ).toBe(401)
+  })
+
+  it('F. rechaza x-internal-service distinto de auction', async () => {
+    expect((await post(autoBidLimitPayload, { service: 'commerce' })).status).toBe(401)
+  })
+
+  it('G. rechaza timestamp invalido o expirado', async () => {
+    expect((await post(autoBidLimitPayload, { timestamp: '0' })).status).toBe(401)
+
+    expect((await post(autoBidLimitPayload, { timestamp: 'not-a-timestamp' })).status).toBe(401)
+
+    expect(
+      (
+        await post(autoBidLimitPayload, {
+          timestamp: String(Date.now() - 24 * 60 * 60 * 1000),
+        })
+      ).status,
+    ).toBe(401)
+  })
+
+  it('H. rechaza payload incompleto', async () => {
+    const incomplete = {
+      notificationId: 'op-h:auto-bid-limit-reached',
+      operationId: 'op-h',
+      recipientPlayerId: autoBidLimitPayload.recipientPlayerId,
+      auctionId: autoBidLimitPayload.auctionId,
+    }
+
+    expect((await post(incomplete)).status).toBe(400)
+  })
+
+  it('I. rechaza occurredAt invalido', async () => {
+    expect(
+      (
+        await post({
+          ...autoBidLimitPayload,
+          notificationId: 'op-i:auto-bid-limit-reached',
+          operationId: 'op-i',
+          occurredAt: 'not-a-date',
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('J. rechaza que el destinatario sea el mismo postor lider', async () => {
+    expect(
+      (
+        await post({
+          ...autoBidLimitPayload,
+          notificationId: 'op-j:auto-bid-limit-reached',
+          operationId: 'op-j',
+          leadingBidderId: autoBidLimitPayload.recipientPlayerId,
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('usa codigo de error y eventos de log propios de auto-bid-limit-reached', async () => {
+    const warn = jest.spyOn(logger, 'warn')
+    const info = jest.spyOn(logger, 'info')
+
+    const invalid = await post({
+      ...autoBidLimitPayload,
+      notificationId: 'op-log:auto-bid-limit-reached',
+      operationId: 'op-log',
+      occurredAt: 'x',
+    })
+
+    expect(invalid.status).toBe(400)
+
+    expect(await invalid.json()).toMatchObject({
+      error: 'invalid_auto_bid_limit_reached_notification',
+    })
+
+    expect((await post(autoBidLimitPayload, { service: 'commerce' })).status).toBe(401)
+
+    expect(warn).toHaveBeenCalledWith('auction_auto_bid_limit_reached_unauthorized', {})
+
+    expect(warn).not.toHaveBeenCalledWith('auction_outbid_unauthorized', expect.anything())
+
+    expect(
+      (
+        await post({
+          ...autoBidLimitPayload,
+          notificationId: 'op-log:auto-bid-limit-reached',
+          operationId: 'op-log',
+        })
+      ).status,
+    ).toBe(201)
+
+    expect(info).toHaveBeenCalledWith(
+      'auction_auto_bid_limit_reached_notification_accepted',
+      expect.objectContaining({
+        notificationId: 'op-log:auto-bid-limit-reached',
+        outcome: 'created',
+        auctionId: autoBidLimitPayload.auctionId,
+        recipientPlayerId: autoBidLimitPayload.recipientPlayerId,
+      }),
+    )
+
+    warn.mockRestore()
+    info.mockRestore()
+  })
+
+  it('un fallo temporal responde 503 y permite un reintento posterior', async () => {
+    const retryPayload = {
+      ...autoBidLimitPayload,
+      notificationId: 'operation-retry:auto-bid-limit-reached',
+      operationId: 'operation-retry',
+    }
+
+    const saveSpy = jest.spyOn(notifications, 'save')
+
+    saveSpy.mockRejectedValueOnce(new Error('mongo unavailable'))
+
+    const first = await post(retryPayload)
+
+    expect(first.status).toBe(503)
+
+    const retry = await post(retryPayload)
+
+    expect(retry.status).toBe(201)
+
+    const pending = await notifications.findPendingForPlayer(retryPayload.recipientPlayerId)
+
+    expect(pending.some((notification) => notification.id === retryPayload.notificationId)).toBe(
+      true,
+    )
+
+    saveSpy.mockRestore()
+  })
+
+  it('regresion: outbid sigue funcionando en el mismo servidor', async () => {
+    const response = await post(
+      { ...payload, notificationId: 'op-regression-2:outbid', operationId: 'op-regression-2' },
+      { path: AUCTION_OUTBID_PATH },
+    )
+
+    expect(response.status).toBe(201)
+
+    expect(await response.json()).toEqual({
+      notificationId: 'op-regression-2:outbid',
       status: 'created',
     })
   })

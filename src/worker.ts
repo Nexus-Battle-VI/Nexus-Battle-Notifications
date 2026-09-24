@@ -9,6 +9,7 @@ import { HandleCatalogProductCreatedInApp } from './application/use-cases/Handle
 import { HandleCatalogProductCreatedNotifications } from './application/use-cases/HandleCatalogProductCreatedNotifications.js'
 import { CreateAuctionOutbidNotification } from './application/use-cases/CreateAuctionOutbidNotification.js'
 import { CreateAuctionClosedByBuyNowNotification } from './application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
+import { CreateAuctionAutoBidLimitReachedNotification } from './application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
 import { CatalogProductEventsConsumer } from './adapters/messaging/CatalogProductEventsConsumer.js'
 import { SystemClock } from './adapters/clock/SystemClock.js'
 import { createAuctionOutbidServer } from './infrastructure/http/auction-outbid-server.js'
@@ -42,8 +43,9 @@ const purchaseServer =
 const catalogNotificationsApp = await buildCatalogNotificationsApplication(config, app.logger)
 
 /**
- * HU-63.5:
- * receptor interno Auction -> Notifications.
+ * Receptor interno Auction -> Notifications: HU-63.5 (puja superada),
+ * HU-64.5 (cierre por compra inmediata) y HU-67 (limite de puja automatica
+ * alcanzado), servidos por el mismo puerto/servidor.
  *
  * Utiliza exactamente el mismo repositorio de notificaciones
  * dirigidas por playerId que la superficie HTTP del jugador.
@@ -62,6 +64,12 @@ const auctionOutbidServer =
           idempotencyTtlMs: config.idempotencyTtlMs,
         }),
         closedByBuyNowUseCase: new CreateAuctionClosedByBuyNowNotification({
+          notifications: catalogNotificationsApp.notifications,
+          idempotencyStore: catalogNotificationsApp.idempotencyStore,
+          clock: new SystemClock(),
+          idempotencyTtlMs: config.idempotencyTtlMs,
+        }),
+        autoBidLimitReachedUseCase: new CreateAuctionAutoBidLimitReachedNotification({
           notifications: catalogNotificationsApp.notifications,
           idempotencyStore: catalogNotificationsApp.idempotencyStore,
           clock: new SystemClock(),

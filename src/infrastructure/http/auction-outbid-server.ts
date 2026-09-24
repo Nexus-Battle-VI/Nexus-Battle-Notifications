@@ -13,6 +13,14 @@ import {
   parseAuctionClosedByBuyNowNotification,
 } from '../../application/dto/AuctionClosedByBuyNowNotification.js'
 import type { CreateAuctionClosedByBuyNowNotification } from '../../application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
+import {
+  InvalidAuctionAutoBidLimitReachedNotificationError,
+  parseAuctionAutoBidLimitReachedNotification,
+} from '../../application/dto/AuctionAutoBidLimitReachedNotification.js'
+import {
+  AuctionAutoBidLimitReachedOutcome,
+  type CreateAuctionAutoBidLimitReachedNotification,
+} from '../../application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
 import { DomainError } from '../../domain/errors/DomainError.js'
 import {
   INTERNAL_CLOCK_SKEW_MS,
@@ -25,6 +33,8 @@ import type { Logger } from '../observability/logger.js'
 export const AUCTION_OUTBID_PATH = '/api/internal/v1/notifications/auction/outbid'
 export const AUCTION_CLOSED_BY_BUY_NOW_PATH =
   '/api/internal/v1/notifications/auction/closed-by-buy-now'
+export const AUCTION_AUTO_BID_LIMIT_REACHED_PATH =
+  '/api/internal/v1/notifications/auction/auto-bid-limit-reached'
 
 export const MAX_AUCTION_OUTBID_BODY_BYTES = 64 * 1024
 
@@ -33,6 +43,7 @@ export interface AuctionOutbidServerOptions {
   readonly sharedSecret: string
   readonly useCase: CreateAuctionOutbidNotification
   readonly closedByBuyNowUseCase?: CreateAuctionClosedByBuyNowNotification
+  readonly autoBidLimitReachedUseCase?: CreateAuctionAutoBidLimitReachedNotification
   readonly logger: Logger
 }
 
@@ -64,10 +75,16 @@ const readBody = async (request: AsyncIterable<unknown>): Promise<string> => {
 }
 
 /**
- * Endpoint interno HU-63.5.
+ * Servidor interno de notificaciones originadas en Auction. Enruta tres
+ * contratos que comparten el mismo puerto, secreto y verificacion HMAC:
  *
- * Solamente Auction puede solicitar una notificacion de puja
- * superada.
+ * - HU-63.5 `/auction/outbid`: puja superada.
+ * - HU-64.5 `/auction/closed-by-buy-now`: cierre anticipado por compra
+ *   inmediata.
+ * - HU-67 `/auction/auto-bid-limit-reached`: la puja automatica del jugador
+ *   alcanzo su limite configurado.
+ *
+ * Solamente Auction puede solicitar cualquiera de las tres.
  *
  * La firma HMAC vincula:
  *
@@ -90,7 +107,11 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
     void (async (): Promise<void> => {
       const path = (request.url ?? '/').split('?')[0] ?? '/'
 
-      if (path !== AUCTION_OUTBID_PATH && path !== AUCTION_CLOSED_BY_BUY_NOW_PATH) {
+      if (
+        path !== AUCTION_OUTBID_PATH &&
+        path !== AUCTION_CLOSED_BY_BUY_NOW_PATH &&
+        path !== AUCTION_AUTO_BID_LIMIT_REACHED_PATH
+      ) {
         respond(404, {
           error: 'not_found',
         })
@@ -105,6 +126,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
       }
 
       const isClosedByBuyNow = path === AUCTION_CLOSED_BY_BUY_NOW_PATH
+      const isAutoBidLimitReached = path === AUCTION_AUTO_BID_LIMIT_REACHED_PATH
 
       try {
         const raw = await readBody(request)
@@ -143,7 +165,9 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           options.logger.warn(
             isClosedByBuyNow
               ? 'auction_closed_by_buy_now_unauthorized'
-              : 'auction_outbid_unauthorized',
+              : isAutoBidLimitReached
+                ? 'auction_auto_bid_limit_reached_unauthorized'
+                : 'auction_outbid_unauthorized',
             {},
           )
 
@@ -172,6 +196,26 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           })
           return
         }
+
+        if (isAutoBidLimitReached) {
+          if (options.autoBidLimitReachedUseCase === undefined)
+            throw new Error('auto_bid_limit_reached_unavailable')
+          const command = parseAuctionAutoBidLimitReachedNotification(body)
+          const result = await options.autoBidLimitReachedUseCase.execute(command)
+          const status = result.outcome === AuctionAutoBidLimitReachedOutcome.Created ? 201 : 200
+          options.logger.info('auction_auto_bid_limit_reached_notification_accepted', {
+            notificationId: result.notificationId,
+            outcome: result.outcome,
+            auctionId: command.auctionId,
+            recipientPlayerId: command.recipientPlayerId,
+          })
+          respond(status, {
+            notificationId: result.notificationId,
+            status: result.outcome,
+          })
+          return
+        }
+
         const command = parseAuctionBidOutbidNotification(body)
         const result = await options.useCase.execute(command)
         const status = result.outcome === AuctionOutbidNotificationOutcome.Created ? 201 : 200
@@ -194,12 +238,15 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           error instanceof SyntaxError ||
           error instanceof InvalidAuctionBidOutbidNotificationError ||
           error instanceof InvalidAuctionClosedByBuyNowNotificationError ||
+          error instanceof InvalidAuctionAutoBidLimitReachedNotificationError ||
           error instanceof DomainError
         ) {
           respond(400, {
             error: isClosedByBuyNow
               ? 'invalid_auction_closed_by_buy_now_notification'
-              : 'invalid_outbid_notification',
+              : isAutoBidLimitReached
+                ? 'invalid_auto_bid_limit_reached_notification'
+                : 'invalid_outbid_notification',
             message: error.message,
           })
           return
@@ -212,7 +259,9 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         options.logger.warn(
           isClosedByBuyNow
             ? 'auction_closed_by_buy_now_notification_pending'
-            : 'auction_outbid_notification_pending',
+            : isAutoBidLimitReached
+              ? 'auction_auto_bid_limit_reached_notification_pending'
+              : 'auction_outbid_notification_pending',
           {
             reason: error instanceof Error ? error.message : 'Fallo desconocido.',
           },
