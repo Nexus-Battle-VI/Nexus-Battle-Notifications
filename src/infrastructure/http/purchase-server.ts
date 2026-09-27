@@ -1,6 +1,9 @@
 import { createServer, type Server } from 'node:http'
 import { DomainError } from '../../domain/errors/DomainError.js'
-import { PurchaseConflictError } from '../../application/ports/PurchaseInboxPort.js'
+import {
+  PurchaseConflictError,
+  PurchasePendingError,
+} from '../../application/ports/PurchaseInboxPort.js'
 import type { SendPurchaseConfirmation } from '../../application/use-cases/SendPurchaseConfirmation.js'
 import {
   signInternalRequest,
@@ -15,6 +18,20 @@ export interface PurchaseServerOptions {
   readonly sharedSecret: string
   readonly useCase: SendPurchaseConfirmation
   readonly logger: Logger
+}
+
+/**
+ * Datos seguros para registrar de un fallo inesperado: el nombre del error y,
+ * si viene del SDK de AWS, el codigo HTTP. Nunca el mensaje ni el destinatario.
+ */
+const describeFailure = (error: unknown): { errorName: string; httpStatus: number | null } => {
+  const metadata = (error as { $metadata?: { httpStatusCode?: unknown } } | null)?.$metadata
+  const status = metadata?.httpStatusCode
+
+  return {
+    errorName: error instanceof Error ? error.name : typeof error,
+    httpStatus: typeof status === 'number' ? status : null,
+  }
 }
 
 export const createPurchaseServer = (options: PurchaseServerOptions): Server => {
@@ -80,7 +97,23 @@ export const createPurchaseServer = (options: PurchaseServerOptions): Server => 
           respond(409, { error: 'purchase_conflict' })
           return
         }
-        options.logger.warn('purchase_confirmation_pending', {})
+        if (error instanceof PurchasePendingError) {
+          options.logger.warn('purchase_confirmation_pending', {})
+          respond(503, { error: 'purchase_pending' })
+          return
+        }
+        // Cualquier otro fallo (plantilla, proveedor de correo, almacenamiento)
+        // se registraba antes con el mismo aviso vacio que «pendiente», asi que
+        // una causa real quedaba escondida: se detecto en produccion con diez
+        // compras reintentadas durante dias sin que ningun log dijera por que.
+        //
+        // SOLO SE REGISTRA EL NOMBRE DEL ERROR Y EL CODIGO HTTP DEL PROVEEDOR,
+        // NUNCA `error.message`: el rechazo de SES incluye la direccion del
+        // destinatario, y esa direccion no debe llegar al registro.
+        //
+        // La respuesta no cambia (503 `purchase_pending`): es el contrato que
+        // Commerce ya interpreta como «reintentar».
+        options.logger.error('purchase_confirmation_failed', describeFailure(error))
         respond(503, { error: 'purchase_pending' })
       }
     })()

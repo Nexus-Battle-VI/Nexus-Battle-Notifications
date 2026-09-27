@@ -20,6 +20,13 @@ export const CatalogChangeType = {
    * una nueva puja valida desplazo al jugador como lider de una subasta.
    */
   AuctionBidOutbid: 'AUCTION_BID_OUTBID',
+  AuctionClosedByBuyNow: 'AUCTION_CLOSED_BY_BUY_NOW',
+
+  /**
+   * HU-67: la puja automatica del jugador alcanzo su limite configurado y no
+   * pudo igualar a quien lo desplazo como lider.
+   */
+  AuctionAutoBidLimitReached: 'AUCTION_AUTO_BID_LIMIT_REACHED',
   AuctionSettledSeller: 'AUCTION_SETTLED_SELLER',
   AuctionSettledWinner: 'AUCTION_SETTLED_WINNER',
   AuctionSettledLoser: 'AUCTION_SETTLED_LOSER',

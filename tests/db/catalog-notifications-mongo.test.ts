@@ -9,6 +9,8 @@ import { CatalogNotification } from '../../src/domain/entities/CatalogNotificati
 import { CatalogChangeType } from '../../src/domain/entities/CatalogChangeType.js'
 import { BannerEntry } from '../../src/domain/entities/BannerEntry.js'
 import { HandleAuctionSettledEvent } from '../../src/application/use-cases/HandleAuctionSettledEvent.js'
+import { CreateAuctionClosedByBuyNowNotification } from '../../src/application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
+import { InMemoryIdempotencyStore } from '../../src/adapters/idempotency/InMemoryIdempotencyStore.js'
 
 const NOW = new Date('2026-09-06T00:00:00.000Z')
 
@@ -122,6 +124,55 @@ describe('Persistencia Mongo de HU-38 (notificaciones y banner)', () => {
         clock: { now: (): Date => NOW },
       }).execute(event),
     ).resolves.toEqual({ created: 0, duplicated: 1 })
+  })
+
+  it('HU-64.5: persiste AUCTION_CLOSED_BY_BUY_NOW y un repository nuevo la lee y absorbe replay', async () => {
+    const command = {
+      operationId: 'op-buy-now-mongo',
+      auctionId: 'auction-buy-now-mongo',
+      recipientId: 'player-buy-now-mongo',
+      transactionId: 'tx-buy-now-mongo',
+      closedAt: '2026-09-24T14:00:00.000Z',
+    }
+    const useCaseFor = (
+      notifications: MongoCatalogNotificationRepository,
+    ): CreateAuctionClosedByBuyNowNotification =>
+      new CreateAuctionClosedByBuyNowNotification({
+        notifications,
+        idempotencyStore: new InMemoryIdempotencyStore(() => NOW.getTime()),
+        clock: { now: (): Date => NOW },
+        idempotencyTtlMs: 60_000,
+      })
+
+    await expect(
+      useCaseFor(new MongoCatalogNotificationRepository(db)).execute(command),
+    ).resolves.toEqual({ outcome: 'created', notificationId: command.operationId })
+
+    const secondRepository = new MongoCatalogNotificationRepository(db)
+    const stored = await secondRepository.findById(command.operationId)
+    expect(stored).toMatchObject({
+      id: command.operationId,
+      playerId: command.recipientId,
+      changeType: CatalogChangeType.AuctionClosedByBuyNow,
+      sourceEventId: command.operationId,
+      sourceEventType: 'auction.closed_by_buy_now.v1',
+    })
+    expect(stored?.implementedAt.toISOString()).toBe(command.closedAt)
+    expect(stored?.description).toContain(command.auctionId)
+    expect(stored?.description).toContain(command.transactionId)
+
+    const pending = await secondRepository.findPendingForPlayer(command.recipientId)
+    expect(pending.map((notification) => notification.id)).toEqual([command.operationId])
+
+    const secondUseCase = useCaseFor(secondRepository)
+    await expect(secondUseCase.execute(command)).resolves.toEqual({
+      outcome: 'duplicated',
+      notificationId: command.operationId,
+    })
+    await expect(secondUseCase.execute({ ...command, auctionId: 'auction-other' })).rejects.toThrow(
+      'operation_conflict',
+    )
+    expect(await secondRepository.findHistoryForPlayer(command.recipientId)).toHaveLength(1)
   })
 
   it('GlobalNotificationReceipt: marcar como leida es idempotente y no afecta a otro jugador', async () => {
