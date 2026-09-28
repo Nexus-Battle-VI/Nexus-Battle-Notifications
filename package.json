@@ -32,7 +32,7 @@
     "@aws-sdk/client-sqs": "^3.1125.0",
     "aws-jwt-verify": "^5.2.1",
     "mongodb": "6.21.0",
-    "nodemailer": "9.0.5"
+    "nodemailer": "9.1.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
