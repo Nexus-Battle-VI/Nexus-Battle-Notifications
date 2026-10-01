@@ -23,6 +23,11 @@ import {
 } from '../../application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
 import { DomainError } from '../../domain/errors/DomainError.js'
 import {
+  InvalidBattleDropNotificationError,
+  parseBattleDropNotification,
+} from '../../application/dto/BattleDropNotification.js'
+import type { CreateBattleDropNotification } from '../../application/use-cases/CreateBattleDropNotification.js'
+import {
   INTERNAL_CLOCK_SKEW_MS,
   signInternalRequest,
   signatureMatches,
@@ -35,6 +40,7 @@ export const AUCTION_CLOSED_BY_BUY_NOW_PATH =
   '/api/internal/v1/notifications/auction/closed-by-buy-now'
 export const AUCTION_AUTO_BID_LIMIT_REACHED_PATH =
   '/api/internal/v1/notifications/auction/auto-bid-limit-reached'
+export const COMBAT_DROP_NOTIFICATION_PATH = '/api/internal/v1/notifications/combat/drop'
 
 export const MAX_AUCTION_OUTBID_BODY_BYTES = 64 * 1024
 
@@ -44,6 +50,7 @@ export interface AuctionOutbidServerOptions {
   readonly useCase: CreateAuctionOutbidNotification
   readonly closedByBuyNowUseCase?: CreateAuctionClosedByBuyNowNotification
   readonly autoBidLimitReachedUseCase?: CreateAuctionAutoBidLimitReachedNotification
+  readonly battleDropUseCase?: CreateBattleDropNotification
   readonly logger: Logger
 }
 
@@ -75,16 +82,22 @@ const readBody = async (request: AsyncIterable<unknown>): Promise<string> => {
 }
 
 /**
- * Servidor interno de notificaciones originadas en Auction. Enruta tres
- * contratos que comparten el mismo puerto, secreto y verificacion HMAC:
+ * Servidor interno de notificaciones de servicio a servicio. El nombre viene
+ * de su primer contrato (Auction); desde HU-30 tambien atiende a Combat, pero
+ * se mantiene como un unico servidor -mismo puerto, secreto y verificacion
+ * HMAC- en vez de abrir uno nuevo solo por el origen de la llamada. Enruta
+ * cuatro contratos:
  *
- * - HU-63.5 `/auction/outbid`: puja superada.
+ * - HU-63.5 `/auction/outbid`: puja superada. Solo Auction.
  * - HU-64.5 `/auction/closed-by-buy-now`: cierre anticipado por compra
- *   inmediata.
+ *   inmediata. Solo Auction.
  * - HU-67 `/auction/auto-bid-limit-reached`: la puja automatica del jugador
- *   alcanzo su limite configurado.
+ *   alcanzo su limite configurado. Solo Auction.
+ * - HU-30 `/combat/drop`: una transferencia de drop Versus quedo acreditada.
+ *   Solo Combat.
  *
- * Solamente Auction puede solicitar cualquiera de las tres.
+ * Cada ruta exige el caller correspondiente; ningun otro servicio puede
+ * solicitar ninguna de las cuatro.
  *
  * La firma HMAC vincula:
  *
@@ -110,7 +123,8 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
       if (
         path !== AUCTION_OUTBID_PATH &&
         path !== AUCTION_CLOSED_BY_BUY_NOW_PATH &&
-        path !== AUCTION_AUTO_BID_LIMIT_REACHED_PATH
+        path !== AUCTION_AUTO_BID_LIMIT_REACHED_PATH &&
+        path !== COMBAT_DROP_NOTIFICATION_PATH
       ) {
         respond(404, {
           error: 'not_found',
@@ -127,6 +141,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
 
       const isClosedByBuyNow = path === AUCTION_CLOSED_BY_BUY_NOW_PATH
       const isAutoBidLimitReached = path === AUCTION_AUTO_BID_LIMIT_REACHED_PATH
+      const isBattleDrop = path === COMBAT_DROP_NOTIFICATION_PATH
 
       try {
         const raw = await readBody(request)
@@ -146,7 +161,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         const receivedSignature = Array.isArray(signature) ? signature[0] : signature
 
         if (
-          receivedService !== 'auction' ||
+          receivedService !== (isBattleDrop ? 'combat' : 'auction') ||
           typeof receivedTimestamp !== 'string' ||
           typeof receivedSignature !== 'string' ||
           options.sharedSecret.length === 0 ||
@@ -175,6 +190,14 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
             error: 'unauthorized',
           })
 
+          return
+        }
+
+        if (isBattleDrop) {
+          if (options.battleDropUseCase === undefined) throw new Error('battle_drop_unavailable')
+          const command = parseBattleDropNotification(body)
+          const result = await options.battleDropUseCase.execute(command)
+          respond(result.outcome === 'created' ? 201 : 200, result)
           return
         }
 
@@ -239,10 +262,13 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           error instanceof InvalidAuctionBidOutbidNotificationError ||
           error instanceof InvalidAuctionClosedByBuyNowNotificationError ||
           error instanceof InvalidAuctionAutoBidLimitReachedNotificationError ||
+          error instanceof InvalidBattleDropNotificationError ||
           error instanceof DomainError
         ) {
           respond(400, {
-            error: isClosedByBuyNow
+            error: isBattleDrop
+              ? 'invalid_battle_drop_notification'
+              : isClosedByBuyNow
               ? 'invalid_auction_closed_by_buy_now_notification'
               : isAutoBidLimitReached
                 ? 'invalid_auto_bid_limit_reached_notification'
