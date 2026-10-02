@@ -31,6 +31,8 @@ export const CatalogChangeType = {
   AuctionSettledWinner: 'AUCTION_SETTLED_WINNER',
   AuctionSettledLoser: 'AUCTION_SETTLED_LOSER',
   AuctionSettledWithoutBids: 'AUCTION_SETTLED_WITHOUT_BIDS',
+  BattleDropGained: 'BATTLE_DROP_GAINED',
+  BattleDropLost: 'BATTLE_DROP_LOST',
 } as const
 
 export type CatalogChangeType = (typeof CatalogChangeType)[keyof typeof CatalogChangeType]

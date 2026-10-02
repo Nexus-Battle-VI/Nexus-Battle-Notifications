@@ -10,6 +10,7 @@ import { HandleCatalogProductCreatedNotifications } from './application/use-case
 import { CreateAuctionOutbidNotification } from './application/use-cases/CreateAuctionOutbidNotification.js'
 import { CreateAuctionClosedByBuyNowNotification } from './application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { CreateAuctionAutoBidLimitReachedNotification } from './application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
+import { CreateBattleDropNotification } from './application/use-cases/CreateBattleDropNotification.js'
 import { CatalogProductEventsConsumer } from './adapters/messaging/CatalogProductEventsConsumer.js'
 import { SystemClock } from './adapters/clock/SystemClock.js'
 import { createAuctionOutbidServer } from './infrastructure/http/auction-outbid-server.js'
@@ -75,6 +76,10 @@ const auctionOutbidServer =
           clock: new SystemClock(),
           idempotencyTtlMs: config.idempotencyTtlMs,
         }),
+        battleDropUseCase: new CreateBattleDropNotification(
+          catalogNotificationsApp.notifications,
+          new SystemClock(),
+        ),
         logger: app.logger,
       })
     : null
