@@ -269,10 +269,10 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
             error: isBattleDrop
               ? 'invalid_battle_drop_notification'
               : isClosedByBuyNow
-              ? 'invalid_auction_closed_by_buy_now_notification'
-              : isAutoBidLimitReached
-                ? 'invalid_auto_bid_limit_reached_notification'
-                : 'invalid_outbid_notification',
+                ? 'invalid_auction_closed_by_buy_now_notification'
+                : isAutoBidLimitReached
+                  ? 'invalid_auto_bid_limit_reached_notification'
+                  : 'invalid_outbid_notification',
             message: error.message,
           })
           return

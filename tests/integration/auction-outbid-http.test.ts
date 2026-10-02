@@ -973,9 +973,8 @@ describe('HTTP interno - transferencia de drop Versus acreditada (HU-30)', () =>
     expect((await post(battleDropPayload, { timestamp: 'not-a-timestamp' })).status).toBe(401)
 
     expect(
-      (
-        await post(battleDropPayload, { timestamp: String(Date.now() - 24 * 60 * 60 * 1000) })
-      ).status,
+      (await post(battleDropPayload, { timestamp: String(Date.now() - 24 * 60 * 60 * 1000) }))
+        .status,
     ).toBe(401)
   })
 

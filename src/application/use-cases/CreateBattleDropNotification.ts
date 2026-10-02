@@ -9,15 +9,14 @@ export class CreateBattleDropNotification {
   private readonly notifications: CatalogNotificationRepositoryPort
   private readonly clock: ClockPort
 
-  constructor(
-    notifications: CatalogNotificationRepositoryPort,
-    clock: ClockPort,
-  ) {
+  constructor(notifications: CatalogNotificationRepositoryPort, clock: ClockPort) {
     this.notifications = notifications
     this.clock = clock
   }
 
-  async execute(command: BattleDropNotificationCommand): Promise<{ notificationId: string; outcome: 'created' | 'duplicated' }> {
+  async execute(
+    command: BattleDropNotificationCommand,
+  ): Promise<{ notificationId: string; outcome: 'created' | 'duplicated' }> {
     const id = `combat:drop:${command.battleId}:${String(command.defeatEventSeq)}:${command.role}:${command.recipientId}`
     const previous = await this.notifications.findById(id)
     if (previous !== null) return { notificationId: id, outcome: 'duplicated' }
