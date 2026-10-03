@@ -1,4 +1,9 @@
 import { createServer, type Server } from 'node:http'
+import {
+  InvalidAuctionConfirmationEventError,
+  parseAuctionConfirmationEvent,
+} from '../../application/dto/AuctionConfirmationEvent.js'
+import type { HandleAuctionConfirmationEvent } from '../../application/use-cases/HandleAuctionConfirmationEvent.js'
 
 import {
   InvalidAuctionBidOutbidNotificationError,
@@ -35,6 +40,8 @@ import {
 } from '../../adapters/identity/internal-signature.js'
 import type { Logger } from '../observability/logger.js'
 
+export const AUCTION_CONFIRMATIONS_PATH = '/api/internal/v1/notifications/auction/confirmations'
+
 export const AUCTION_OUTBID_PATH = '/api/internal/v1/notifications/auction/outbid'
 export const AUCTION_CLOSED_BY_BUY_NOW_PATH =
   '/api/internal/v1/notifications/auction/closed-by-buy-now'
@@ -50,6 +57,7 @@ export interface AuctionOutbidServerOptions {
   readonly useCase: CreateAuctionOutbidNotification
   readonly closedByBuyNowUseCase?: CreateAuctionClosedByBuyNowNotification
   readonly autoBidLimitReachedUseCase?: CreateAuctionAutoBidLimitReachedNotification
+  readonly confirmationUseCase?: HandleAuctionConfirmationEvent
   readonly battleDropUseCase?: CreateBattleDropNotification
   readonly logger: Logger
 }
@@ -86,8 +94,9 @@ const readBody = async (request: AsyncIterable<unknown>): Promise<string> => {
  * de su primer contrato (Auction); desde HU-30 tambien atiende a Combat, pero
  * se mantiene como un unico servidor -mismo puerto, secreto y verificacion
  * HMAC- en vez de abrir uno nuevo solo por el origen de la llamada. Enruta
- * cuatro contratos:
+ * cinco contratos:
  *
+ * - HU-92.2 `/auction/confirmations`: publicacion y puja aceptadas. Solo Auction.
  * - HU-63.5 `/auction/outbid`: puja superada. Solo Auction.
  * - HU-64.5 `/auction/closed-by-buy-now`: cierre anticipado por compra
  *   inmediata. Solo Auction.
@@ -97,7 +106,7 @@ const readBody = async (request: AsyncIterable<unknown>): Promise<string> => {
  *   Solo Combat.
  *
  * Cada ruta exige el caller correspondiente; ningun otro servicio puede
- * solicitar ninguna de las cuatro.
+ * solicitar ninguna de las cinco.
  *
  * La firma HMAC vincula:
  *
@@ -121,6 +130,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
       const path = (request.url ?? '/').split('?')[0] ?? '/'
 
       if (
+        path !== AUCTION_CONFIRMATIONS_PATH &&
         path !== AUCTION_OUTBID_PATH &&
         path !== AUCTION_CLOSED_BY_BUY_NOW_PATH &&
         path !== AUCTION_AUTO_BID_LIMIT_REACHED_PATH &&
@@ -139,6 +149,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         return
       }
 
+      const isConfirmation = path === AUCTION_CONFIRMATIONS_PATH
       const isClosedByBuyNow = path === AUCTION_CLOSED_BY_BUY_NOW_PATH
       const isAutoBidLimitReached = path === AUCTION_AUTO_BID_LIMIT_REACHED_PATH
       const isBattleDrop = path === COMBAT_DROP_NOTIFICATION_PATH
@@ -178,11 +189,13 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           )
         ) {
           options.logger.warn(
-            isClosedByBuyNow
-              ? 'auction_closed_by_buy_now_unauthorized'
-              : isAutoBidLimitReached
-                ? 'auction_auto_bid_limit_reached_unauthorized'
-                : 'auction_outbid_unauthorized',
+            isConfirmation
+              ? 'auction_confirmation_unauthorized'
+              : isClosedByBuyNow
+                ? 'auction_closed_by_buy_now_unauthorized'
+                : isAutoBidLimitReached
+                  ? 'auction_auto_bid_limit_reached_unauthorized'
+                  : 'auction_outbid_unauthorized',
             {},
           )
 
@@ -190,6 +203,20 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
             error: 'unauthorized',
           })
 
+          return
+        }
+
+        if (isConfirmation) {
+          if (options.confirmationUseCase === undefined)
+            throw new Error('auction_confirmation_unavailable')
+          const event = parseAuctionConfirmationEvent(body)
+          const result = await options.confirmationUseCase.execute(event)
+          options.logger.info('auction_confirmation_accepted', {
+            ...result,
+            eventType: event.eventType,
+            correlationId: event.correlationId,
+          })
+          respond(result.created > 0 ? 201 : 200, result)
           return
         }
 
@@ -258,6 +285,7 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         }
 
         if (
+          error instanceof InvalidAuctionConfirmationEventError ||
           error instanceof SyntaxError ||
           error instanceof InvalidAuctionBidOutbidNotificationError ||
           error instanceof InvalidAuctionClosedByBuyNowNotificationError ||
@@ -266,13 +294,15 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
           error instanceof DomainError
         ) {
           respond(400, {
-            error: isBattleDrop
-              ? 'invalid_battle_drop_notification'
-              : isClosedByBuyNow
-                ? 'invalid_auction_closed_by_buy_now_notification'
-                : isAutoBidLimitReached
-                  ? 'invalid_auto_bid_limit_reached_notification'
-                  : 'invalid_outbid_notification',
+            error: isConfirmation
+              ? 'invalid_auction_confirmation_event'
+              : isBattleDrop
+                ? 'invalid_battle_drop_notification'
+                : isClosedByBuyNow
+                  ? 'invalid_auction_closed_by_buy_now_notification'
+                  : isAutoBidLimitReached
+                    ? 'invalid_auto_bid_limit_reached_notification'
+                    : 'invalid_outbid_notification',
             message: error.message,
           })
           return
@@ -283,11 +313,13 @@ export const createAuctionOutbidServer = (options: AuctionOutbidServerOptions): 
         }
 
         options.logger.warn(
-          isClosedByBuyNow
-            ? 'auction_closed_by_buy_now_notification_pending'
-            : isAutoBidLimitReached
-              ? 'auction_auto_bid_limit_reached_notification_pending'
-              : 'auction_outbid_notification_pending',
+          isConfirmation
+            ? 'auction_confirmation_pending'
+            : isClosedByBuyNow
+              ? 'auction_closed_by_buy_now_notification_pending'
+              : isAutoBidLimitReached
+                ? 'auction_auto_bid_limit_reached_notification_pending'
+                : 'auction_outbid_notification_pending',
           {
             reason: error instanceof Error ? error.message : 'Fallo desconocido.',
           },
