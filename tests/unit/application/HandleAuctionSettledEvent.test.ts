@@ -20,6 +20,7 @@ const event = (losers: readonly string[] = ['loser-a', 'loser-b']): AuctionSettl
     winnerId: 'winner',
     winningBidId: 'bid-1',
     finalAmountCredits: 42,
+    captureOperationId: 'auction:auction-1:settlement:capture',
     loserBidderIds: losers,
     settledAt: '2026-01-01T00:00:00.000Z',
   },
@@ -37,6 +38,10 @@ describe('HandleAuctionSettledEvent', () => {
     expect(
       (await notifications.findById('auction:auction-1:settled:winner:winner'))?.sourceEventType,
     ).toBe('auction.settled.v1')
+    expect((await notifications.findHistoryForPlayer('seller'))[0]).toMatchObject({
+      changeType: 'AUCTION_SELLER_CREDITED',
+      description: expect.stringContaining('auction:auction-1:settlement:capture'),
+    })
   })
   it('un fallo parcial corta y el retry converge sin duplicar', async (): Promise<void> => {
     class FailingRepository extends InMemoryCatalogNotificationRepository {

@@ -6,6 +6,8 @@ export interface AuctionSettledWithWinnerData {
   readonly winnerId: string
   readonly winningBidId: string
   readonly finalAmountCredits: number
+  /** Referencia de la captura Wallet; opcional para replays de eventos v1 previos. */
+  readonly captureOperationId?: string
   readonly loserBidderIds: readonly string[]
   readonly settledAt: string
 }

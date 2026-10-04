@@ -17,6 +17,9 @@ export const CatalogChangeType = {
   AuctionPublished: 'AUCTION_PUBLISHED',
   AuctionNewBid: 'AUCTION_NEW_BID',
   AuctionBidAccepted: 'AUCTION_BID_ACCEPTED',
+  AuctionSellerCredited: 'AUCTION_SELLER_CREDITED',
+  AuctionBuyNowCompleted: 'AUCTION_BUY_NOW_COMPLETED',
+  AuctionProductClaimed: 'AUCTION_PRODUCT_CLAIMED',
 
   /**
    * HU-63 CA-05:

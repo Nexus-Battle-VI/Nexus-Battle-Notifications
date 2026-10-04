@@ -53,6 +53,43 @@ const accepted = {
   },
 } as const
 
+const buyNow = {
+  eventId: 'buy-now-op-1:buy-now-completed',
+  eventType: 'auction.buy-now.completed',
+  eventVersion: 1,
+  aggregateId: 'auction-1',
+  occurredAt: '2026-10-03T20:00:00.000Z',
+  producer: 'auction',
+  correlationId: 'buy-now-op-1',
+  data: {
+    operationId: 'buy-now-op-1',
+    transactionId: 'transaction-1',
+    transferId: 'transfer-1',
+    auctionId: 'auction-1',
+    productId: 'product-1',
+    sellerId: 'seller-1',
+    buyerId: 'buyer-1',
+    amountCredits: 100,
+    completedAt: '2026-10-03T20:00:00.000Z',
+  },
+} as const
+
+const claimed = {
+  eventId: 'auction:auction-1:product-claimed',
+  eventType: 'auction.product.claimed',
+  eventVersion: 1,
+  aggregateId: 'auction-1',
+  occurredAt: '2026-10-03T20:00:00.000Z',
+  producer: 'auction',
+  correlationId: 'auction:auction-1:inventory:claim',
+  data: {
+    auctionId: 'auction-1',
+    winnerId: 'winner-1',
+    productId: 'product-1',
+    claimedAt: '2026-10-03T20:00:00.000Z',
+  },
+} as const
+
 describe('HTTP interno HU-92.2 - confirmaciones de Auction', () => {
   let server: Server
   let url: string
@@ -133,6 +170,38 @@ describe('HTTP interno HU-92.2 - confirmaciones de Auction', () => {
     ).toBe(true)
     expect((await notifications.findHistoryForPlayer('bidder-1'))[0]?.changeType).toBe(
       'AUCTION_BID_ACCEPTED',
+    )
+    expect(await notifications.findHistoryForPlayer('outsider')).toHaveLength(0)
+  })
+
+  it('confirma buy-now al comprador, acredita al vendedor y confirma el reclamo al ganador', async () => {
+    const buyNowResponse = await post(buyNow)
+    expect(buyNowResponse.status).toBe(201)
+    expect(await buyNowResponse.json()).toEqual({
+      eventId: buyNow.eventId,
+      created: 2,
+      duplicated: 0,
+    })
+    expect(
+      (await notifications.findHistoryForPlayer('buyer-1')).some(
+        (notification) => notification.changeType === 'AUCTION_BUY_NOW_COMPLETED',
+      ),
+    ).toBe(true)
+    expect(
+      (await notifications.findHistoryForPlayer('seller-1')).some(
+        (notification) => notification.changeType === 'AUCTION_SELLER_CREDITED',
+      ),
+    ).toBe(true)
+
+    const claimedResponse = await post(claimed)
+    expect(claimedResponse.status).toBe(201)
+    expect(await claimedResponse.json()).toEqual({
+      eventId: claimed.eventId,
+      created: 1,
+      duplicated: 0,
+    })
+    expect((await notifications.findHistoryForPlayer('winner-1'))[0]?.changeType).toBe(
+      'AUCTION_PRODUCT_CLAIMED',
     )
     expect(await notifications.findHistoryForPlayer('outsider')).toHaveLength(0)
   })

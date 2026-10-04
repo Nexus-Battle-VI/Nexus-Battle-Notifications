@@ -4,6 +4,8 @@ import { HandleAuctionConfirmationEvent } from '../../../src/application/use-cas
 import {
   parseAuctionConfirmationEvent,
   type AuctionBidAcceptedEventV1,
+  type AuctionBuyNowCompletedEventV1,
+  type AuctionProductClaimedEventV1,
   type AuctionPublishedEventV1,
 } from '../../../src/application/dto/AuctionConfirmationEvent.js'
 
@@ -44,6 +46,41 @@ const accepted: AuctionBidAcceptedEventV1 = {
     acceptedAt: occurredAt,
   },
 }
+const buyNow: AuctionBuyNowCompletedEventV1 = {
+  eventId: 'buy-now-op-1:buy-now-completed',
+  eventType: 'auction.buy-now.completed',
+  eventVersion: 1,
+  aggregateId: 'auction-1',
+  occurredAt,
+  producer: 'auction',
+  correlationId: 'buy-now-op-1',
+  data: {
+    operationId: 'buy-now-op-1',
+    transactionId: 'transaction-1',
+    transferId: 'transfer-1',
+    auctionId: 'auction-1',
+    productId: 'product-1',
+    sellerId: 'seller-1',
+    buyerId: 'buyer-1',
+    amountCredits: 100,
+    completedAt: occurredAt,
+  },
+}
+const claimed: AuctionProductClaimedEventV1 = {
+  eventId: 'auction:auction-1:product-claimed',
+  eventType: 'auction.product.claimed',
+  eventVersion: 1,
+  aggregateId: 'auction-1',
+  occurredAt,
+  producer: 'auction',
+  correlationId: 'auction:auction-1:inventory:claim',
+  data: {
+    auctionId: 'auction-1',
+    winnerId: 'winner-1',
+    productId: 'product-1',
+    claimedAt: occurredAt,
+  },
+}
 
 describe('HandleAuctionConfirmationEvent HU-92.2', () => {
   test('publicacion: avisa solo al vendedor y conserva la identidad al reintentar', async () => {
@@ -73,6 +110,42 @@ describe('HandleAuctionConfirmationEvent HU-92.2', () => {
     )
     expect(await repo.findHistoryForPlayer('outsider')).toHaveLength(0)
     expect(await repo.findAllGlobal()).toHaveLength(0)
+  })
+
+  test('buy-now acredita al vendedor y confirma solo al comprador', async () => {
+    const repo = new InMemoryCatalogNotificationRepository()
+    const handler = new HandleAuctionConfirmationEvent(repo, clock)
+    await expect(handler.execute(buyNow)).resolves.toEqual({
+      eventId: buyNow.eventId,
+      created: 2,
+      duplicated: 0,
+    })
+    expect((await repo.findHistoryForPlayer('seller-1'))[0]).toMatchObject({
+      changeType: 'AUCTION_SELLER_CREDITED',
+      description: expect.stringContaining('transfer-1'),
+    })
+    expect((await repo.findHistoryForPlayer('buyer-1'))[0]?.changeType).toBe(
+      'AUCTION_BUY_NOW_COMPLETED',
+    )
+    expect(await repo.findHistoryForPlayer('outsider')).toHaveLength(0)
+  })
+
+  test('reclamo: confirma una sola vez al ganador', async () => {
+    const repo = new InMemoryCatalogNotificationRepository()
+    const handler = new HandleAuctionConfirmationEvent(repo, clock)
+    await expect(handler.execute(claimed)).resolves.toEqual({
+      eventId: claimed.eventId,
+      created: 1,
+      duplicated: 0,
+    })
+    await expect(handler.execute(claimed)).resolves.toEqual({
+      eventId: claimed.eventId,
+      created: 0,
+      duplicated: 1,
+    })
+    expect((await repo.findHistoryForPlayer('winner-1'))[0]?.changeType).toBe(
+      'AUCTION_PRODUCT_CLAIMED',
+    )
   })
 
   test('un replay conserva el estado leido y no vuelve a guardar', async () => {
