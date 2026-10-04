@@ -35,7 +35,48 @@ export interface AuctionBidAcceptedEventV1 {
   }
 }
 
-export type AuctionConfirmationEvent = AuctionPublishedEventV1 | AuctionBidAcceptedEventV1
+export interface AuctionBuyNowCompletedEventV1 {
+  readonly eventId: string
+  readonly eventType: 'auction.buy-now.completed'
+  readonly eventVersion: 1
+  readonly aggregateId: string
+  readonly occurredAt: string
+  readonly producer: 'auction'
+  readonly correlationId: string
+  readonly data: {
+    readonly operationId: string
+    readonly transactionId: string
+    readonly transferId: string
+    readonly auctionId: string
+    readonly productId: string
+    readonly sellerId: string
+    readonly buyerId: string
+    readonly amountCredits: number
+    readonly completedAt: string
+  }
+}
+
+export interface AuctionProductClaimedEventV1 {
+  readonly eventId: string
+  readonly eventType: 'auction.product.claimed'
+  readonly eventVersion: 1
+  readonly aggregateId: string
+  readonly occurredAt: string
+  readonly producer: 'auction'
+  readonly correlationId: string
+  readonly data: {
+    readonly auctionId: string
+    readonly winnerId: string
+    readonly productId: string
+    readonly claimedAt: string
+  }
+}
+
+export type AuctionConfirmationEvent =
+  | AuctionPublishedEventV1
+  | AuctionBidAcceptedEventV1
+  | AuctionBuyNowCompletedEventV1
+  | AuctionProductClaimedEventV1
 
 export class InvalidAuctionConfirmationEventError extends Error {
   constructor(message: string) {
@@ -155,6 +196,63 @@ export const parseAuctionConfirmationEvent = (value: unknown): AuctionConfirmati
     )
       return invalid('La puja contiene identificadores, destinatarios o fechas inconsistentes.')
     return { ...common, eventType: 'auction.bid.accepted', data }
+  }
+  if (envelope['eventType'] === 'auction.buy-now.completed') {
+    const raw = object(envelope['data'], [
+      'operationId',
+      'transactionId',
+      'transferId',
+      'auctionId',
+      'productId',
+      'sellerId',
+      'buyerId',
+      'amountCredits',
+      'completedAt',
+    ])
+    const amountCredits = raw['amountCredits']
+    if (
+      typeof amountCredits !== 'number' ||
+      !Number.isSafeInteger(amountCredits) ||
+      amountCredits <= 0
+    )
+      return invalid('amountCredits debe ser un entero positivo seguro.')
+    const data = {
+      operationId: text(raw, 'operationId'),
+      transactionId: text(raw, 'transactionId'),
+      transferId: text(raw, 'transferId'),
+      auctionId: text(raw, 'auctionId'),
+      productId: text(raw, 'productId'),
+      sellerId: text(raw, 'sellerId'),
+      buyerId: text(raw, 'buyerId'),
+      amountCredits,
+      completedAt: date(raw, 'completedAt'),
+    }
+    if (
+      common.aggregateId !== data.auctionId ||
+      common.correlationId !== data.operationId ||
+      common.eventId !== `${data.operationId}:buy-now-completed` ||
+      common.occurredAt !== data.completedAt ||
+      data.sellerId === data.buyerId
+    )
+      return invalid('La compra inmediata contiene identificadores o destinatarios inconsistentes.')
+    return { ...common, eventType: 'auction.buy-now.completed', data }
+  }
+  if (envelope['eventType'] === 'auction.product.claimed') {
+    const raw = object(envelope['data'], ['auctionId', 'winnerId', 'productId', 'claimedAt'])
+    const data = {
+      auctionId: text(raw, 'auctionId'),
+      winnerId: text(raw, 'winnerId'),
+      productId: text(raw, 'productId'),
+      claimedAt: date(raw, 'claimedAt'),
+    }
+    if (
+      common.aggregateId !== data.auctionId ||
+      common.correlationId !== `auction:${data.auctionId}:inventory:claim` ||
+      common.eventId !== `auction:${data.auctionId}:product-claimed` ||
+      common.occurredAt !== data.claimedAt
+    )
+      return invalid('El producto reclamado contiene identificadores o fechas inconsistentes.')
+    return { ...common, eventType: 'auction.product.claimed', data }
   }
   return invalid('Tipo de evento no soportado.')
 }

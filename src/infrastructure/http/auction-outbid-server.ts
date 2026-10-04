@@ -96,7 +96,8 @@ const readBody = async (request: AsyncIterable<unknown>): Promise<string> => {
  * HMAC- en vez de abrir uno nuevo solo por el origen de la llamada. Enruta
  * cinco contratos:
  *
- * - HU-92.2 `/auction/confirmations`: publicacion y puja aceptadas. Solo Auction.
+ * - HU-92 `/auction/confirmations`: confirmaciones de publicacion, puja,
+ *   acreditacion, compra inmediata y reclamo. Solo Auction.
  * - HU-63.5 `/auction/outbid`: puja superada. Solo Auction.
  * - HU-64.5 `/auction/closed-by-buy-now`: cierre anticipado por compra
  *   inmediata. Solo Auction.

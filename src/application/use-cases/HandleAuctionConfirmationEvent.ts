@@ -111,6 +111,38 @@ export class HandleAuctionConfirmationEvent {
       ]
     }
 
+    if (event.eventType === 'auction.buy-now.completed') {
+      const { auctionId, sellerId, buyerId, transactionId, transferId, amountCredits } = event.data
+      return [
+        CatalogNotification.create({
+          ...common,
+          id: notificationId(event.eventId, 'seller-credited'),
+          playerId: sellerId,
+          changeType: CatalogChangeType.AuctionSellerCredited,
+          description: `Se acreditaron ${String(amountCredits)} creditos por la compra inmediata de la subasta ${auctionId}. Referencia de transferencia: ${transferId}.`,
+        }),
+        CatalogNotification.create({
+          ...common,
+          id: notificationId(event.eventId, 'buyer'),
+          playerId: buyerId,
+          changeType: CatalogChangeType.AuctionBuyNowCompleted,
+          description: `Completaste la compra inmediata de la subasta ${auctionId}. Transaccion ${transactionId}.`,
+        }),
+      ]
+    }
+
+    if (event.eventType === 'auction.product.claimed') {
+      return [
+        CatalogNotification.create({
+          ...common,
+          id: notificationId(event.eventId, 'winner'),
+          playerId: event.data.winnerId,
+          changeType: CatalogChangeType.AuctionProductClaimed,
+          description: `Recibiste el producto ${event.data.productId} reclamado de la subasta ${event.data.auctionId}.`,
+        }),
+      ]
+    }
+
     const { auctionId, bidderId, sellerId, bidId, amountCredits } = event.data
 
     return [

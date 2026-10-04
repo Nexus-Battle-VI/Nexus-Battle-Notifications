@@ -73,6 +73,9 @@ export const parseAuctionSettledEventV1 = (body: string): AuctionSettledEventV1 
       winnerId: text(d['winnerId'], 'data.winnerId'),
       winningBidId: text(d['winningBidId'], 'data.winningBidId'),
       finalAmountCredits: d['finalAmountCredits'],
+      ...(d['captureOperationId'] === undefined
+        ? {}
+        : { captureOperationId: text(d['captureOperationId'], 'data.captureOperationId') }),
       loserBidderIds: d['loserBidderIds'],
     },
   }

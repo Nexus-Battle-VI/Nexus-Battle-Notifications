@@ -72,11 +72,15 @@ export class HandleAuctionSettledEvent {
         changeType:
           event.data.resultType === 'WITHOUT_BIDS'
             ? CatalogChangeType.AuctionSettledWithoutBids
-            : CatalogChangeType.AuctionSettledSeller,
+            : event.data.captureOperationId === undefined
+              ? CatalogChangeType.AuctionSettledSeller
+              : CatalogChangeType.AuctionSellerCredited,
         description:
           event.data.resultType === 'WITHOUT_BIDS'
             ? `La subasta ${auctionId} del producto ${productId} finalizo sin pujas.`
-            : `La subasta ${auctionId} del producto ${productId} finalizo con una venta.`,
+            : event.data.captureOperationId === undefined
+              ? `La subasta ${auctionId} del producto ${productId} finalizo con una venta.`
+              : `Se acreditaron ${String(event.data.finalAmountCredits)} creditos por la subasta ${auctionId}. Referencia de operacion: ${event.data.captureOperationId}.`,
       },
     ]
     if (event.data.resultType === 'WITHOUT_BIDS') return result
