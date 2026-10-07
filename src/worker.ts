@@ -1,3 +1,4 @@
+import { HandleAuctionConfirmationEvent } from './application/use-cases/HandleAuctionConfirmationEvent.js'
 import { loadConfig } from './infrastructure/config/env.js'
 import { buildApplication } from './infrastructure/bootstrap/composition-root.js'
 import { createHealthServer } from './infrastructure/http/health-server.js'
@@ -10,6 +11,7 @@ import { HandleCatalogProductCreatedNotifications } from './application/use-case
 import { CreateAuctionOutbidNotification } from './application/use-cases/CreateAuctionOutbidNotification.js'
 import { CreateAuctionClosedByBuyNowNotification } from './application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { CreateAuctionAutoBidLimitReachedNotification } from './application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
+import { CreateBattleDropNotification } from './application/use-cases/CreateBattleDropNotification.js'
 import { CatalogProductEventsConsumer } from './adapters/messaging/CatalogProductEventsConsumer.js'
 import { SystemClock } from './adapters/clock/SystemClock.js'
 import { createAuctionOutbidServer } from './infrastructure/http/auction-outbid-server.js'
@@ -37,7 +39,7 @@ const purchaseServer =
  * Cuando esta activo, `catalog.product.created` gana una SEGUNDA reaccion
  * -in-app, ademas del correo heredado de HU-33.10- compuesta sobre el MISMO
  * consumidor (`app.catalogQueue`/`app.catalogUseCase`): dos consumidores
- * separados sondeando la misma cola competirian por el mismo mensaje en vez
+ * separados sondeando la misma cola competirian por el mismo mensajeen vez
  * de recibirlo los dos. Ver HandleCatalogProductCreatedNotifications.ts.
  */
 const catalogNotificationsApp = await buildCatalogNotificationsApplication(config, app.logger)
@@ -45,7 +47,7 @@ const catalogNotificationsApp = await buildCatalogNotificationsApplication(confi
 /**
  * Receptor interno Auction -> Notifications: HU-63.5 (puja superada),
  * HU-64.5 (cierre por compra inmediata) y HU-67 (limite de puja automatica
- * alcanzado), servidos por el mismo puerto/servidor.
+ * alcanzado) y HU-92.2 (confirmaciones de publicacion y puja), servidos por el mismo puerto/servidor.
  *
  * Utiliza exactamente el mismo repositorio de notificaciones
  * dirigidas por playerId que la superficie HTTP del jugador.
@@ -75,6 +77,14 @@ const auctionOutbidServer =
           clock: new SystemClock(),
           idempotencyTtlMs: config.idempotencyTtlMs,
         }),
+        confirmationUseCase: new HandleAuctionConfirmationEvent(
+          catalogNotificationsApp.notifications,
+          new SystemClock(),
+        ),
+        battleDropUseCase: new CreateBattleDropNotification(
+          catalogNotificationsApp.notifications,
+          new SystemClock(),
+        ),
         logger: app.logger,
       })
     : null
@@ -234,7 +244,7 @@ while (state.running) {
    * unico try/catch y un unico `state.lastPollSucceeded`. Antes de separar
    * `queueDriver` de `catalogQueueDriver`, esto ya era asi -no lo introduce
    * este cambio-, pero ahora es mas consecuente: un fallo transitorio de la
-   * cola GENERAL (memoria o SQS) impide que `catalogCreatedConsumer` corra
+   * cola GENERAL (memoria o SQS) impide que `catalogCreatedConsumer`corra
    * siquiera en esta iteracion -el `await` es secuencial dentro del mismo
    * bloque- y marca el readiness `queue` como no-listo aunque la cola dedicada
    * de Catalog (ADR-017) este perfectamente sana, y viceversa. Separar esto en

@@ -10,11 +10,13 @@ import { SystemClock } from '../../src/adapters/clock/SystemClock.js'
 import { CreateAuctionClosedByBuyNowNotification } from '../../src/application/use-cases/CreateAuctionClosedByBuyNowNotification.js'
 import { CreateAuctionOutbidNotification } from '../../src/application/use-cases/CreateAuctionOutbidNotification.js'
 import { CreateAuctionAutoBidLimitReachedNotification } from '../../src/application/use-cases/CreateAuctionAutoBidLimitReachedNotification.js'
+import { CreateBattleDropNotification } from '../../src/application/use-cases/CreateBattleDropNotification.js'
 import { CatalogChangeType } from '../../src/domain/entities/CatalogChangeType.js'
 import {
   AUCTION_AUTO_BID_LIMIT_REACHED_PATH,
   AUCTION_CLOSED_BY_BUY_NOW_PATH,
   AUCTION_OUTBID_PATH,
+  COMBAT_DROP_NOTIFICATION_PATH,
   createAuctionOutbidServer,
 } from '../../src/infrastructure/http/auction-outbid-server.js'
 import { createLogger } from '../../src/infrastructure/observability/logger.js'
@@ -789,6 +791,245 @@ describe('HTTP interno - limite de puja automatica alcanzado (HU-67)', () => {
 
     expect(await response.json()).toEqual({
       notificationId: 'op-regression-2:outbid',
+      status: 'created',
+    })
+  })
+})
+
+const battleDropPayload = {
+  battleId: 'battle-hu30-1',
+  defeatEventSeq: 2,
+  role: 'GAINED' as const,
+  recipientId: 'player-winner',
+  productInstanceId: 'unit-1',
+  productId: 'product-1',
+  itemId: 'sword-1',
+  creditedAt: '2026-10-01T12:00:00.000Z',
+}
+
+describe('HTTP interno - transferencia de drop Versus acreditada (HU-30)', () => {
+  let server: Server
+  let url: string
+  let notifications: InMemoryCatalogNotificationRepository
+  const logger = createLogger({
+    level: 'error',
+    service: 'test',
+    version: 'test',
+  })
+
+  beforeAll(async () => {
+    notifications = new InMemoryCatalogNotificationRepository()
+
+    const clock = new SystemClock()
+
+    const idempotencyStore = new InMemoryIdempotencyStore(() => clock.now().getTime())
+
+    server = createAuctionOutbidServer({
+      port: 0,
+      sharedSecret: secret,
+      useCase: new CreateAuctionOutbidNotification({
+        notifications,
+        idempotencyStore,
+        clock,
+        idempotencyTtlMs: 86_400_000,
+      }),
+      battleDropUseCase: new CreateBattleDropNotification(notifications, clock),
+      logger,
+    })
+
+    await once(server, 'listening')
+
+    url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve()
+      })
+    })
+  })
+
+  const post = (
+    body: unknown = battleDropPayload,
+    options: {
+      readonly path?: string
+      readonly service?: string
+      readonly timestamp?: string
+      readonly signature?: string
+    } = {},
+  ): Promise<Response> => {
+    const path = options.path ?? COMBAT_DROP_NOTIFICATION_PATH
+    const service = options.service ?? 'combat'
+    const timestamp = options.timestamp ?? String(Date.now())
+    const signature =
+      options.signature ??
+      signInternalRequest(secret, {
+        service,
+        method: 'POST',
+        path,
+        timestamp,
+        body,
+      })
+
+    return fetch(url + path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-service': service,
+        'x-internal-timestamp': timestamp,
+        'x-internal-signature': signature,
+      },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it('A. caller combat con HMAC valido crea la notificacion de GANANCIA (201)', async () => {
+    const response = await post()
+
+    expect(response.status).toBe(201)
+
+    const body = (await response.json()) as { notificationId: string; outcome: string }
+
+    expect(body.outcome).toBe('created')
+
+    const stored = await notifications.findById(body.notificationId)
+
+    expect(stored?.changeType).toBe(CatalogChangeType.BattleDropGained)
+
+    expect(stored?.playerId).toBe(battleDropPayload.recipientId)
+  })
+
+  it('B. mismo battleId/defeatEventSeq/role/recipientId responde duplicated (200)', async () => {
+    const response = await post()
+
+    expect(response.status).toBe(200)
+
+    expect(await response.json()).toEqual({
+      notificationId: 'combat:drop:battle-hu30-1:2:GAINED:player-winner',
+      outcome: 'duplicated',
+    })
+
+    expect(await notifications.findHistoryForPlayer(battleDropPayload.recipientId)).toHaveLength(1)
+  })
+
+  it('C. el derrotado recibe su propia notificacion de PERDIDA, independiente de la del ganador', async () => {
+    const response = await post({
+      ...battleDropPayload,
+      role: 'LOST' as const,
+      recipientId: 'player-loser',
+    })
+
+    expect(response.status).toBe(201)
+
+    const stored = await notifications.findPendingForPlayer('player-loser')
+
+    expect(stored).toHaveLength(1)
+
+    expect(stored[0]?.changeType).toBe(CatalogChangeType.BattleDropLost)
+  })
+
+  it('D. rechaza request sin firma', async () => {
+    const response = await fetch(url + COMBAT_DROP_NOTIFICATION_PATH, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-service': 'combat',
+        'x-internal-timestamp': String(Date.now()),
+      },
+      body: JSON.stringify(battleDropPayload),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it('E. rechaza firma incorrecta, incluida la firmada con el path de outbid', async () => {
+    expect((await post(battleDropPayload, { signature: 'a'.repeat(64) })).status).toBe(401)
+
+    const timestamp = String(Date.now())
+
+    const outbidPathSignature = signInternalRequest(secret, {
+      service: 'combat',
+      method: 'POST',
+      path: AUCTION_OUTBID_PATH,
+      timestamp,
+      body: battleDropPayload,
+    })
+
+    expect(
+      (await post(battleDropPayload, { timestamp, signature: outbidPathSignature })).status,
+    ).toBe(401)
+  })
+
+  it('F. rechaza x-internal-service distinto de combat, incluido auction', async () => {
+    expect((await post(battleDropPayload, { service: 'commerce' })).status).toBe(401)
+
+    expect((await post(battleDropPayload, { service: 'auction' })).status).toBe(401)
+  })
+
+  it('G. rechaza timestamp invalido o expirado', async () => {
+    expect((await post(battleDropPayload, { timestamp: '0' })).status).toBe(401)
+
+    expect((await post(battleDropPayload, { timestamp: 'not-a-timestamp' })).status).toBe(401)
+
+    expect(
+      (await post(battleDropPayload, { timestamp: String(Date.now() - 24 * 60 * 60 * 1000) }))
+        .status,
+    ).toBe(401)
+  })
+
+  it('H. rechaza payload incompleto', async () => {
+    const incomplete = {
+      battleId: battleDropPayload.battleId,
+      defeatEventSeq: battleDropPayload.defeatEventSeq,
+      role: battleDropPayload.role,
+    }
+
+    expect((await post(incomplete)).status).toBe(400)
+  })
+
+  it('I. rechaza creditedAt invalido', async () => {
+    expect(
+      (
+        await post({
+          ...battleDropPayload,
+          defeatEventSeq: 99,
+          creditedAt: 'not-a-date',
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('un fallo temporal responde 503 y permite un reintento posterior sin duplicar', async () => {
+    const retryPayload = { ...battleDropPayload, defeatEventSeq: 77, recipientId: 'player-retry' }
+
+    const saveSpy = jest.spyOn(notifications, 'save')
+
+    saveSpy.mockRejectedValueOnce(new Error('mongo unavailable'))
+
+    const first = await post(retryPayload)
+
+    expect(first.status).toBe(503)
+
+    const retry = await post(retryPayload)
+
+    expect(retry.status).toBe(201)
+
+    expect(await notifications.findPendingForPlayer('player-retry')).toHaveLength(1)
+
+    saveSpy.mockRestore()
+  })
+
+  it('regresion: outbid sigue funcionando en el mismo servidor', async () => {
+    const response = await post(
+      { ...payload, notificationId: 'op-regression-3:outbid', operationId: 'op-regression-3' },
+      { path: AUCTION_OUTBID_PATH, service: 'auction' },
+    )
+
+    expect(response.status).toBe(201)
+
+    expect(await response.json()).toEqual({
+      notificationId: 'op-regression-3:outbid',
       status: 'created',
     })
   })
