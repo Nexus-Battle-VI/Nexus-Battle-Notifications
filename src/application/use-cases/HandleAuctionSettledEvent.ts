@@ -3,6 +3,7 @@ import type { CatalogNotificationRepositoryPort } from '../ports/CatalogNotifica
 import type { ClockPort } from '../ports/ClockPort.js'
 import { CatalogNotification } from '../../domain/entities/CatalogNotification.js'
 import { CatalogChangeType } from '../../domain/entities/CatalogChangeType.js'
+import { formatCredits } from './notification-text.js'
 
 export interface HandleAuctionSettledEventDependencies {
   readonly notifications: CatalogNotificationRepositoryPort
@@ -59,7 +60,7 @@ export class HandleAuctionSettledEvent {
     changeType: CatalogChangeType
     description: string
   }[] {
-    const { auctionId, productId, sellerId } = event.data
+    const { auctionId, sellerId } = event.data
     const result: {
       id: string
       playerId: string
@@ -75,8 +76,8 @@ export class HandleAuctionSettledEvent {
             : CatalogChangeType.AuctionSettledSeller,
         description:
           event.data.resultType === 'WITHOUT_BIDS'
-            ? `La subasta ${auctionId} del producto ${productId} finalizo sin pujas.`
-            : `La subasta ${auctionId} del producto ${productId} finalizo con una venta.`,
+            ? 'Tu subasta finalizó sin pujas.'
+            : `Tu subasta finalizó con una venta por ${formatCredits(event.data.finalAmountCredits)}.`,
       },
     ]
     if (event.data.resultType === 'WITHOUT_BIDS') return result
@@ -87,7 +88,7 @@ export class HandleAuctionSettledEvent {
         id: `auction:${auctionId}:settled:winner:${event.data.winnerId}`,
         playerId: event.data.winnerId,
         changeType: CatalogChangeType.AuctionSettledWinner,
-        description: `Ganaste la subasta ${auctionId} del producto ${productId} por ${String(event.data.finalAmountCredits)} creditos.`,
+        description: `Ganaste una subasta por ${formatCredits(event.data.finalAmountCredits)}.`,
       })
     }
     for (const loserId of event.data.loserBidderIds)
@@ -97,7 +98,7 @@ export class HandleAuctionSettledEvent {
           id: `auction:${auctionId}:settled:loser:${loserId}`,
           playerId: loserId,
           changeType: CatalogChangeType.AuctionSettledLoser,
-          description: `No ganaste la subasta ${auctionId} del producto ${productId}.`,
+          description: 'No ganaste una subasta en la que pujaste.',
         })
       }
     return result

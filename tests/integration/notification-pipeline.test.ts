@@ -87,7 +87,9 @@ describe('Flujo completo de notificaciones', () => {
       requeued: 0,
       deadLettered: 0,
     })
-    expect(harness.emailSender.sent[0]?.subject).toBe('Tu codigo de verificacion de Nexus Battles')
+    expect(harness.emailSender.sent[0]?.subject).toBe(
+      'Tu código de verificación de Nexus Battles VI',
+    )
     expect(harness.emailSender.sent[0]?.text).toContain('123456')
     expect(harness.queue.pendingCount).toBe(0)
     expect(harness.queue.inFlightCount).toBe(0)

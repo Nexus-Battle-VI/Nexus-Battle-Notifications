@@ -97,7 +97,7 @@ describe('HandleCatalogProductCreated', () => {
     expect(emailSender.sent).toHaveLength(1)
     expect(emailSender.sent[0]?.subject).toBe('¡Nuevo producto en el catálogo: Espada de Fuego!')
     expect(emailSender.sent[0]?.text).toContain('Espada de Fuego')
-    expect(emailSender.sent[0]?.text).toContain('ARMA')
+    expect(emailSender.sent[0]?.text).toContain('Categoría: Arma')
   })
 
   it('detecta entrega duplicada del mismo eventId y no genera una segunda notificacion', async () => {
