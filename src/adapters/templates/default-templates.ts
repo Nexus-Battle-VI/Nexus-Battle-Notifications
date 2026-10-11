@@ -1,116 +1,346 @@
-import type { TemplateDefinition } from './InMemoryTemplateRenderer.js'
+import type { RenderVariables } from '../../application/ports/TemplateRendererPort.js'
+import {
+  PUBLIC_WEB_URL,
+  emailCode,
+  emailFacts,
+  emailLayout,
+  emailNote,
+  emailParagraph,
+  emailText,
+} from './email-layout.js'
+import { escapeHtml, type TemplateDefinition } from './InMemoryTemplateRenderer.js'
 
 /**
- * Catalogo de plantillas del alcance de Sprint 1.
+ * Catalogo de plantillas de correo.
  *
- * Los identificadores forman parte del contrato asincrono publicado en
- * `docs/contracts`. Anadir o retirar una plantilla es un cambio de contrato.
+ * Los identificadores y las variables que declara cada plantilla forman parte
+ * del contrato asincrono publicado en `docs/contracts` (Infrastructure).
+ * Anadir o retirar una plantilla, o una variable, es un cambio de contrato.
+ * El aspecto (EN-031) no lo es: lo pone `email-layout.ts`.
  */
+
+const read = (variables: RenderVariables, key: string): string => {
+  const value = variables[key]
+  return value === undefined ? '' : String(value)
+}
+
+const DATE_FORMAT = new Intl.DateTimeFormat('es-CO', {
+  dateStyle: 'long',
+  timeStyle: 'short',
+  timeZone: 'America/Bogota',
+})
+
+/** Fecha ISO legible en espanol de Colombia; vacia si no es una fecha. */
+export const formatEmailDate = (iso: string): string => {
+  const date = new Date(iso)
+  return iso === '' || Number.isNaN(date.getTime())
+    ? ''
+    : `${DATE_FORMAT.format(date)} (hora de Colombia)`
+}
+
+const SANCTION_LABELS: Readonly<Record<string, string>> = {
+  WARNING: 'Advertencia',
+  TEMPORARY_SUSPENSION: 'Suspensión temporal',
+  PERMANENT_BAN: 'Expulsión permanente',
+}
+
+const PRODUCT_TYPE_LABELS: Readonly<Record<string, string>> = {
+  HEROE: 'Héroe',
+  HABILIDAD: 'Habilidad',
+  ARMA: 'Arma',
+  ARMADURA: 'Armadura',
+  ITEM: 'Ítem',
+  EPICA: 'Épica',
+}
+
+/**
+ * URL de imagen utilizable en un correo: absoluta `http(s)` o ruta de Web.
+ * Cualquier otra cosa (un esquema `javascript:`, una ruta relativa al
+ * cliente de correo) se descarta.
+ */
+const emailImageUrl = (raw: string): string | null => {
+  if (/^https?:\/\/[^\s"'<>]+$/u.test(raw)) return raw
+  if (/^\/[^/\s"'<>][^\s"'<>]*$/u.test(raw)) return `${PUBLIC_WEB_URL}${raw}`
+  return null
+}
+
 export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
   'account-sanction-applied': {
-    subject: 'Nexus Battles — Se ha aplicado una sancion a tu cuenta',
-    html:
-      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-      '<p>Hola {{displayName}},</p>' +
-      '<p>Se ha aplicado una sancion a tu cuenta.</p>' +
-      '<p><strong>Tipo de sancion:</strong> {{sanctionType}}</p>' +
-      '<p><strong>Motivo:</strong> {{reason}}</p>' +
-      '<p><strong>Fecha de aplicacion:</strong> {{appliedAt}}</p>' +
-      '<p><strong>Identificador de sancion:</strong> {{sanctionId}}</p>' +
-      '<p>Puedes ejercer tu opcion de apelacion durante los siguientes <strong>{{appealWindowDays}} dias</strong>.</p>' +
-      '<p><strong>Fecha limite para apelar:</strong> {{appealDeadline}}</p>' +
-      '<p>Si la sancion corresponde a una suspension temporal, su fecha de finalizacion es: {{expiresAt}}</p>' +
-      '<p><strong>Equipo Nexus Battles</strong><br>Promoviendo una comunidad segura y justa.</p>',
-    text:
-      'Nexus Battles\n\n' +
-      'Hola {{displayName}},\n\n' +
-      'Se ha aplicado una sancion a tu cuenta.\n\n' +
-      'Tipo de sancion: {{sanctionType}}\n' +
-      'Motivo: {{reason}}\n' +
-      'Fecha de aplicacion: {{appliedAt}}\n' +
-      'Identificador de sancion: {{sanctionId}}\n\n' +
-      'Puedes ejercer tu opcion de apelacion durante los siguientes {{appealWindowDays}} dias.\n' +
-      'Fecha limite para apelar: {{appealDeadline}}\n' +
-      'Fecha de finalizacion de suspension, cuando aplique: {{expiresAt}}\n\n' +
-      'Equipo Nexus Battles\nPromoviendo una comunidad segura y justa.',
+    subject: 'Nexus Battles VI — Se aplicó una sanción a tu cuenta',
+    html: emailLayout({
+      preheader: 'Revisa el detalle y, si no estás de acuerdo, apela dentro del plazo.',
+      icon: 'sanction',
+      iconAlt: 'Sanción',
+      title: 'Sanción aplicada',
+      body:
+        emailParagraph('Hola {{displayName}},') +
+        emailParagraph('Se aplicó una sanción a tu cuenta. Este es el detalle:') +
+        emailFacts([
+          ['Tipo', '{{sanctionTypeLabel}}'],
+          ['Motivo', '{{reason}}'],
+          ['Aplicada el', '{{appliedAtLabel}}'],
+          ['Puedes apelar hasta', '{{appealDeadlineLabel}}'],
+          ['Referencia', '{{sanctionId}}'],
+        ]) +
+        '{{expiryHtml}}' +
+        emailParagraph(
+          'Tienes <strong>{{appealWindowDays}} días</strong> para apelar desde tu cuenta. Indica la referencia de arriba.',
+        ),
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    text: emailText({
+      title: 'Sanción aplicada',
+      paragraphs: [
+        'Hola {{displayName}},',
+        'Se aplicó una sanción a tu cuenta.',
+        'Tipo: {{sanctionTypeLabel}}\n' +
+          'Motivo: {{reason}}\n' +
+          'Aplicada el: {{appliedAtLabel}}\n' +
+          'Puedes apelar hasta: {{appealDeadlineLabel}}\n' +
+          'Referencia: {{sanctionId}}{{expiryText}}',
+        'Tienes {{appealWindowDays}} días para apelar desde tu cuenta. Indica la referencia de arriba.',
+      ],
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    trustedHtml: ['expiryHtml'],
+    derive: (variables) => {
+      const type = read(variables, 'sanctionType')
+      const expires = formatEmailDate(read(variables, 'expiresAt'))
+      return {
+        sanctionTypeLabel: SANCTION_LABELS[type] ?? type,
+        appliedAtLabel: formatEmailDate(read(variables, 'appliedAt')),
+        appealDeadlineLabel: formatEmailDate(read(variables, 'appealDeadline')),
+        expiryHtml:
+          expires === ''
+            ? ''
+            : emailParagraph(`La suspensión termina el <strong>${escapeHtml(expires)}</strong>.`),
+        expiryText: expires === '' ? '' : `\nLa suspensión termina el: ${expires}`,
+      }
+    },
   },
 
   'commerce-purchase-confirmed-v1': {
-    subject: 'Nexus Battles VI — Confirmacion de compra {{orderId}}',
-    html: '<p><strong>Nexus Battles VI · UPB-COMPANY</strong></p><p>Tu compra simulada {{orderId}} se completo correctamente.</p><ul>{{itemsHtml}}</ul><p><strong>Total pagado: {{total}}</strong></p><p>Gracias por jugar con nosotros. Equipo Nexus Battles VI.</p>',
-    text: 'Nexus Battles VI · UPB-COMPANY\nTu compra simulada {{orderId}} se completo correctamente.\n{{itemsText}}\nTotal pagado: {{total}}\nGracias por jugar con nosotros. Equipo Nexus Battles VI.',
+    subject: 'Nexus Battles VI — Confirmación de compra {{orderId}}',
+    html: emailLayout({
+      preheader: 'Tu compra se completó. Total pagado: {{total}}.',
+      icon: 'confirmed',
+      iconAlt: 'Compra confirmada',
+      title: 'Compra confirmada',
+      body:
+        emailParagraph('Tu compra simulada se completó correctamente. Esto es lo que adquiriste:') +
+        '<ul style="margin:0 0 16px;padding-left:20px;font-family:\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:24px;color:#2a2236;">{{itemsHtml}}</ul>' +
+        emailFacts([
+          ['Pedido', '{{orderId}}'],
+          ['Total pagado', '{{total}}'],
+        ]),
+      action: { label: 'Ver mis pedidos', path: '/orders' },
+      signature: 'Gracias por jugar con nosotros · Equipo Nexus Battles VI',
+    }),
+    text: emailText({
+      title: 'Compra confirmada',
+      paragraphs: [
+        'Tu compra simulada {{orderId}} se completó correctamente.',
+        '{{itemsText}}',
+        'Total pagado: {{total}}',
+      ],
+      action: { label: 'Ver mis pedidos', path: '/orders' },
+      signature: 'Gracias por jugar con nosotros · Equipo Nexus Battles VI',
+    }),
+    // Llega escapada desde `SendPurchaseConfirmation`: cada linea en su `<li>`.
+    trustedHtml: ['itemsHtml'],
   },
+
   'account-verification-code': {
-    subject: 'Tu codigo de verificacion de Nexus Battles',
-    html: '<p>Hola {{displayName}},</p><p>Tu codigo de verificacion es <strong>{{code}}</strong>. Caduca en {{expiresInMinutes}} minutos.</p>',
-    text: 'Hola {{displayName}}, tu codigo de verificacion es {{code}}. Caduca en {{expiresInMinutes}} minutos.',
+    subject: 'Tu código de verificación de Nexus Battles VI',
+    html: emailLayout({
+      preheader: 'Tu código caduca en {{expiresInMinutes}} minutos.',
+      icon: 'key',
+      iconAlt: 'Código de verificación',
+      title: 'Tu código de verificación',
+      body:
+        emailParagraph('Hola {{displayName}}, escribe este código para continuar:') +
+        emailCode('{{code}}') +
+        emailNote(
+          'Caduca en {{expiresInMinutes}} minutos. Si no lo pediste tú, ignora este mensaje.',
+        ),
+    }),
+    text: emailText({
+      title: 'Tu código de verificación',
+      paragraphs: [
+        'Hola {{displayName}}, escribe este código para continuar: {{code}}',
+        'Caduca en {{expiresInMinutes}} minutos. Si no lo pediste tú, ignora este mensaje.',
+      ],
+    }),
   },
+
   'account-welcome': {
-    subject: 'Bienvenido a Nexus Battles',
-    html: '<p>Hola {{displayName}},</p><p>Tu cuenta fue creada correctamente.</p>',
-    text: 'Hola {{displayName}}, tu cuenta fue creada correctamente.',
+    subject: 'Te damos la bienvenida a Nexus Battles VI',
+    html: emailLayout({
+      preheader: 'Tu cuenta está lista. Elige tu héroe y entra a la batalla.',
+      icon: 'user',
+      iconAlt: 'Cuenta creada',
+      title: '¡Te damos la bienvenida, {{displayName}}!',
+      body:
+        emailParagraph('Tu cuenta de Nexus Battles VI se creó correctamente.') +
+        emailParagraph(
+          'Explora la vitrina, arma tu inventario y únete a misiones, subastas y torneos con el resto de guerreros.',
+        ),
+      action: { label: 'Entrar a la fortaleza', path: '/login' },
+    }),
+    text: emailText({
+      title: '¡Te damos la bienvenida, {{displayName}}!',
+      paragraphs: [
+        'Tu cuenta de Nexus Battles VI se creó correctamente.',
+        'Explora la vitrina, arma tu inventario y únete a misiones, subastas y torneos con el resto de guerreros.',
+      ],
+      action: { label: 'Entrar a la fortaleza', path: '/login' },
+    }),
   },
+
   'commerce-order-confirmed': {
-    subject: 'Confirmacion de tu pedido {{orderId}}',
-    html: '<p>Hola {{displayName}},</p><p>Tu pedido <strong>{{orderId}}</strong> fue confirmado por un total de {{total}}.</p>',
-    text: 'Hola {{displayName}}, tu pedido {{orderId}} fue confirmado por un total de {{total}}.',
+    subject: 'Confirmación de tu pedido {{orderId}}',
+    html: emailLayout({
+      preheader: 'Tu pedido fue confirmado por un total de {{total}}.',
+      icon: 'confirmed',
+      iconAlt: 'Pedido confirmado',
+      title: 'Pedido confirmado',
+      body:
+        emailParagraph('Hola {{displayName}}, tu pedido fue confirmado.') +
+        emailFacts([
+          ['Pedido', '{{orderId}}'],
+          ['Total', '{{total}}'],
+        ]),
+      action: { label: 'Ver mis pedidos', path: '/orders' },
+    }),
+    text: emailText({
+      title: 'Pedido confirmado',
+      paragraphs: [
+        'Hola {{displayName}}, tu pedido {{orderId}} fue confirmado por un total de {{total}}.',
+      ],
+      action: { label: 'Ver mis pedidos', path: '/orders' },
+    }),
   },
+
   'account-password-recovery-code': {
-    subject: 'Restablece tu contraseña de Nexus Battles',
-    html:
-      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-      '<p>Hola, hemos recibido una solicitud para <strong>restablecer la contraseña</strong> de tu cuenta.</p>' +
-      '<p>Para continuar con el proceso, utiliza el siguiente código de verificación:</p>' +
-      '<p><strong>{{code}}</strong></p>' +
-      '<p>Este código es válido por unos minutos y solo puede utilizarse una vez.</p>' +
-      '<p>Si <strong>no solicitaste este cambio</strong>, puedes ignorar este mensaje. Tu contraseña actual no se modificará mientras no se complete el proceso.</p>' +
-      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
-    text:
-      'Nexus Battles\n\n' +
-      'Hola, hemos recibido una solicitud para restablecer la contraseña de tu cuenta.\n\n' +
-      'Para continuar con el proceso, utiliza el siguiente código de verificación:\n\n' +
-      '{{code}}\n\n' +
-      'Este código es válido por unos minutos y solo puede utilizarse una vez.\n\n' +
-      'Si no solicitaste este cambio, puedes ignorar este mensaje. Tu contraseña actual no se modificará mientras no se complete el proceso.\n\n' +
-      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+    subject: 'Restablece tu contraseña de Nexus Battles VI',
+    html: emailLayout({
+      preheader: 'Usa este código para restablecer tu contraseña.',
+      icon: 'lock',
+      iconAlt: 'Recuperación de contraseña',
+      title: 'Restablece tu contraseña',
+      body:
+        emailParagraph(
+          'Hola, recibimos una solicitud para <strong>restablecer la contraseña</strong> de tu cuenta. Escribe este código en la pantalla de recuperación:',
+        ) +
+        emailCode('{{code}}') +
+        emailNote('Es válido por unos minutos y solo puede usarse una vez.') +
+        emailNote(
+          'Si no solicitaste este cambio, ignora este mensaje: tu contraseña actual no cambia mientras no se complete el proceso.',
+        ),
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
+    text: emailText({
+      title: 'Restablece tu contraseña',
+      paragraphs: [
+        'Hola, recibimos una solicitud para restablecer la contraseña de tu cuenta. Escribe este código en la pantalla de recuperación:',
+        '{{code}}',
+        'Es válido por unos minutos y solo puede usarse una vez.',
+        'Si no solicitaste este cambio, ignora este mensaje: tu contraseña actual no cambia mientras no se complete el proceso.',
+      ],
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
   },
+
   'account-password-reset-confirmation': {
-    subject: 'Tu contraseña de Nexus Battles fue actualizada',
-    html:
-      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-      '<p>Hola, tu contraseña se actualizó correctamente.</p>' +
-      '<p>Si <strong>no solicitaste este cambio</strong>, avisa al equipo.</p>' +
-      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
-    text:
-      'Nexus Battles\n\n' +
-      'Hola, tu contraseña se actualizó correctamente.\n\n' +
-      'Si no solicitaste este cambio, avisa al equipo.\n\n' +
-      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+    subject: 'Tu contraseña de Nexus Battles VI fue actualizada',
+    html: emailLayout({
+      preheader: 'Ya puedes iniciar sesión con tu nueva contraseña.',
+      icon: 'shield',
+      iconAlt: 'Contraseña actualizada',
+      title: 'Contraseña actualizada',
+      body:
+        emailParagraph('Hola, tu contraseña se actualizó correctamente.') +
+        emailNote(
+          'Si no hiciste este cambio, recupera el acceso de inmediato desde «¿Olvidaste tu contraseña?» en la pantalla de inicio de sesión.',
+        ),
+      action: { label: 'Iniciar sesión', path: '/login' },
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
+    text: emailText({
+      title: 'Contraseña actualizada',
+      paragraphs: [
+        'Hola, tu contraseña se actualizó correctamente.',
+        'Si no hiciste este cambio, recupera el acceso de inmediato desde «¿Olvidaste tu contraseña?» en la pantalla de inicio de sesión.',
+      ],
+      action: { label: 'Iniciar sesión', path: '/login' },
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
   },
+
+  // Sin llamada a la accion: la cuenta ya no existe. HU-43.4 limita lo que
+  // este correo puede afirmar (ver la prueba del adaptador).
   'account-deletion-closed': {
     subject: 'Tu solicitud de eliminación de cuenta ha finalizado',
-    html:
-      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-      '<p>Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.</p>' +
-      '<p>Esta es la notificación de cierre de esa solicitud.</p>' +
-      '<p><strong>Equipo Nexus Battles</strong><br>Protegiendo tu cuenta, batalla tras batalla.</p>',
-    text:
-      'Nexus Battles\n\n' +
-      'Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.\n\n' +
-      'Esta es la notificación de cierre de esa solicitud.\n\n' +
-      'Equipo Nexus Battles\nProtegiendo tu cuenta, batalla tras batalla.',
+    html: emailLayout({
+      preheader: 'El proceso de eliminación de tu cuenta terminó.',
+      icon: 'check',
+      iconAlt: 'Solicitud finalizada',
+      title: 'Solicitud finalizada',
+      body:
+        emailParagraph(
+          'Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.',
+        ) + emailNote('Esta es la notificación de cierre de esa solicitud.'),
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
+    text: emailText({
+      title: 'Solicitud finalizada',
+      paragraphs: [
+        'Hola, el proceso de eliminación de tu cuenta que solicitaste ha finalizado.',
+        'Esta es la notificación de cierre de esa solicitud.',
+      ],
+      signature: 'Equipo Nexus Battles VI · Protegiendo tu cuenta, batalla tras batalla',
+    }),
   },
+
   'catalog-product-created': {
     subject: '¡Nuevo producto en el catálogo: {{productName}}!',
-    html:
-      '<p>⚔️ <strong>Nexus Battles</strong></p>' +
-      '<p>¡Atención, guerreros! Se ha forjado un nuevo producto en el catálogo:</p>' +
-      '<p><strong>{{productName}}</strong> (Categoría: <em>{{productType}}</em>)</p>' +
-      '<p>Ya está disponible en la vitrina para su adquisición.</p>',
-    text:
-      'Nexus Battles\n\n' +
-      '¡Atención, guerreros! Se ha forjado un nuevo producto en el catálogo:\n\n' +
-      '{{productName}} (Categoría: {{productType}})\n\n' +
-      'Ya está disponible en la vitrina para su adquisición.\n',
+    html: emailLayout({
+      preheader: '{{productName}} ya está en la vitrina.',
+      icon: 'catalog',
+      iconAlt: 'Novedad del catálogo',
+      title: 'Nuevo en la vitrina',
+      body:
+        emailParagraph('¡Atención, guerreros! Se forjó un nuevo producto en el catálogo:') +
+        '{{productImageHtml}}' +
+        emailFacts([
+          ['Producto', '{{productName}}'],
+          ['Categoría', '{{productTypeLabel}}'],
+        ]) +
+        emailParagraph('Ya está disponible en la vitrina para su adquisición.'),
+      action: { label: 'Ir a la vitrina', path: '/ecommerce' },
+    }),
+    text: emailText({
+      title: 'Nuevo en la vitrina',
+      paragraphs: [
+        '¡Atención, guerreros! Se forjó un nuevo producto en el catálogo:',
+        '{{productName}} (Categoría: {{productTypeLabel}})',
+        'Ya está disponible en la vitrina para su adquisición.',
+      ],
+      action: { label: 'Ir a la vitrina', path: '/ecommerce' },
+    }),
+    trustedHtml: ['productImageHtml'],
+    derive: (variables) => {
+      const type = read(variables, 'productType')
+      const url = emailImageUrl(read(variables, 'imageUrl'))
+      return {
+        productTypeLabel: PRODUCT_TYPE_LABELS[type] ?? type,
+        productImageHtml:
+          url === null
+            ? ''
+            : `<img src="${escapeHtml(url)}" width="160" alt="${escapeHtml(read(variables, 'productName'))}" style="display:block;margin:0 auto 20px;max-width:160px;height:auto;border:0;image-rendering:pixelated;">`,
+      }
+    },
   },
 }

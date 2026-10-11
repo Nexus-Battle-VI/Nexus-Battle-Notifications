@@ -7,11 +7,19 @@ import type { CatalogNotificationRepositoryPort } from '../ports/CatalogNotifica
 import type { ClockPort } from '../ports/ClockPort.js'
 import { CatalogNotification } from '../../domain/entities/CatalogNotification.js'
 import { CatalogChangeType } from '../../domain/entities/CatalogChangeType.js'
+import { formatCredits, formatNotificationDate } from './notification-text.js'
 
 const notificationId = (eventId: string, role: string): string =>
   createHash('sha256')
     .update(JSON.stringify(['auction-confirmation-v1', eventId, role]))
     .digest('hex')
+
+const publishedDescription = (closesAt: string): string => {
+  const closes = formatNotificationDate(closesAt)
+  return closes === null
+    ? 'Publicaste una subasta.'
+    : `Publicaste una subasta. Finaliza el ${closes}.`
+}
 
 const assertSame = (existing: CatalogNotification, expected: CatalogNotification): void => {
   if (
@@ -106,12 +114,12 @@ export class HandleAuctionConfirmationEvent {
           id: notificationId(event.eventId, 'seller'),
           playerId: event.data.sellerId,
           changeType: CatalogChangeType.AuctionPublished,
-          description: `Publicaste la subasta ${event.data.auctionId} del producto ${event.data.productId}. Finaliza el ${event.data.closesAt}.`,
+          description: publishedDescription(event.data.closesAt),
         }),
       ]
     }
 
-    const { auctionId, bidderId, sellerId, bidId, amountCredits } = event.data
+    const { bidderId, sellerId, amountCredits } = event.data
 
     return [
       CatalogNotification.create({
@@ -119,14 +127,14 @@ export class HandleAuctionConfirmationEvent {
         id: notificationId(event.eventId, 'seller'),
         playerId: sellerId,
         changeType: CatalogChangeType.AuctionNewBid,
-        description: `La subasta ${auctionId} recibio la puja ${bidId} del jugador ${bidderId} por ${String(amountCredits)} creditos.`,
+        description: `Tu subasta recibió una puja de ${formatCredits(amountCredits)}.`,
       }),
       CatalogNotification.create({
         ...common,
         id: notificationId(event.eventId, 'bidder'),
         playerId: bidderId,
         changeType: CatalogChangeType.AuctionBidAccepted,
-        description: `Tu puja ${bidId} en la subasta ${auctionId} por ${String(amountCredits)} creditos fue aceptada.`,
+        description: `Tu puja de ${formatCredits(amountCredits)} fue aceptada.`,
       }),
     ]
   }

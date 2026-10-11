@@ -6,6 +6,7 @@ import type { IdempotencyStorePort } from '../ports/IdempotencyStorePort.js'
 import { CatalogNotification } from '../../domain/entities/CatalogNotification.js'
 import { CatalogChangeType } from '../../domain/entities/CatalogChangeType.js'
 import { DomainError } from '../../domain/errors/DomainError.js'
+import { formatCredits } from './notification-text.js'
 
 export const AuctionOutbidNotificationOutcome = {
   Created: 'created',
@@ -147,9 +148,8 @@ export class CreateAuctionOutbidNotification {
 
   private description(command: AuctionBidOutbidNotification): string {
     return (
-      `Tu puja en la subasta ${command.auctionId} ` +
-      'fue superada. ' +
-      `La nueva oferta lider es de ${String(command.winningAmountCredits)} creditos.`
+      'Superaron tu puja en una subasta. ' +
+      `La nueva oferta líder es de ${formatCredits(command.winningAmountCredits)}.`
     )
   }
 

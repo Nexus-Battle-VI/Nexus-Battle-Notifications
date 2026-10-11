@@ -137,7 +137,8 @@ describe('HTTP interno HU-63.5 - puja superada', () => {
 
     expect(pending[0]?.playerId).toBe(payload.recipientPlayerId)
 
-    expect(pending[0]?.description).toContain(payload.auctionId)
+    // EN-031: el texto no expone identificadores internos.
+    expect(pending[0]?.description).not.toContain(payload.auctionId)
 
     expect(pending[0]?.description).toContain(String(payload.winningAmountCredits))
 

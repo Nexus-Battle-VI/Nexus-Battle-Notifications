@@ -47,7 +47,7 @@ export class SendPurchaseConfirmation {
     try {
       const details = command.items.map(
         (item) =>
-          `${item.name} (${item.productId}) x${String(item.quantity)} — ${money(item.unitPrice, command.currency)}; subtotal ${money(item.unitPrice * item.quantity, command.currency)}`,
+          `${item.name} x${String(item.quantity)} — ${money(item.unitPrice, command.currency)}; subtotal ${money(item.unitPrice * item.quantity, command.currency)}`,
       )
       const rendered = await this.deps.templates.render('commerce-purchase-confirmed-v1', {
         orderId,
