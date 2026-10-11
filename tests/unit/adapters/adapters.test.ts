@@ -114,24 +114,25 @@ describe('InMemoryTemplateRenderer', () => {
       expiresInMinutes: 10,
     })
 
-    expect(rendered.subject).toBe('Tu codigo de verificacion de Nexus Battles')
-    expect(rendered.html).toContain('<strong>123456</strong>')
-    expect(rendered.text).toBe(
-      'Hola Ana, tu codigo de verificacion es 123456. Caduca en 10 minutos.',
-    )
+    expect(rendered.subject).toBe('Tu código de verificación de Nexus Battles VI')
+    expect(rendered.html).toContain('>123456</td>')
+    expect(rendered.text).toContain('Hola Ana, escribe este código para continuar: 123456')
+    expect(rendered.text).toContain('Caduca en 10 minutos.')
   })
 
   it('sustituye por cadena vacia una variable ausente', async () => {
     const rendered = await renderer.render('account-welcome', {})
 
-    expect(rendered.text).toBe('Hola , tu cuenta fue creada correctamente.')
+    expect(rendered.text).toContain('¡Te damos la bienvenida, !')
+    expect(rendered.html).not.toContain('{{')
+    expect(rendered.html).not.toContain('undefined')
   })
 
   it('renderiza el codigo de recuperacion de contrasena', async () => {
     const rendered = await renderer.render('account-password-recovery-code', { code: '000000' })
 
-    expect(rendered.subject).toBe('Restablece tu contraseña de Nexus Battles')
-    expect(rendered.html).toContain('<strong>000000</strong>')
+    expect(rendered.subject).toBe('Restablece tu contraseña de Nexus Battles VI')
+    expect(rendered.html).toContain('>000000</td>')
     expect(rendered.html).toContain('Equipo Nexus Battles')
     expect(rendered.text).toContain('000000')
     expect(rendered.text).toContain('Si no solicitaste este cambio')
@@ -140,7 +141,7 @@ describe('InMemoryTemplateRenderer', () => {
   it('renderiza la confirmacion de cambio de contrasena', async () => {
     const rendered = await renderer.render('account-password-reset-confirmation', {})
 
-    expect(rendered.subject).toBe('Tu contraseña de Nexus Battles fue actualizada')
+    expect(rendered.subject).toBe('Tu contraseña de Nexus Battles VI fue actualizada')
     expect(rendered.text).toContain('tu contraseña se actualizó correctamente.')
   })
 
@@ -177,7 +178,7 @@ describe('InMemoryTemplateRenderer', () => {
       total: '120.00',
     })
 
-    expect(rendered.subject).toBe('Confirmacion de tu pedido ORD-9')
+    expect(rendered.subject).toBe('Confirmación de tu pedido ORD-9')
   })
 
   it('acepta espacios dentro del marcador', async () => {

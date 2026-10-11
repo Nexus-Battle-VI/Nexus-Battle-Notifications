@@ -26,8 +26,8 @@ export class CreateBattleDropNotification {
       playerId: command.recipientId,
       changeType: gained ? CatalogChangeType.BattleDropGained : CatalogChangeType.BattleDropLost,
       description: gained
-        ? `Obtuviste ${command.itemId} por una derrota en Versus.`
-        : `Perdiste ${command.itemId} por una derrota en Versus.`,
+        ? 'Obtuviste un objeto del rival derrotado en Versus.'
+        : 'Perdiste un objeto al ser derrotado en Versus.',
       productId: command.productId,
       productName: null,
       implementedAt: new Date(command.creditedAt),
