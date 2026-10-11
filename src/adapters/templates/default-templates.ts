@@ -44,6 +44,11 @@ const SANCTION_LABELS: Readonly<Record<string, string>> = {
   PERMANENT_BAN: 'Expulsión permanente',
 }
 
+const APPEAL_DECISION_LABELS: Readonly<Record<string, string>> = {
+  UPHELD: 'Se mantiene la sanción',
+  OVERTURNED: 'Se revirtió la sanción',
+}
+
 const PRODUCT_TYPE_LABELS: Readonly<Record<string, string>> = {
   HEROE: 'Héroe',
   HABILIDAD: 'Habilidad',
@@ -119,6 +124,93 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
         expiryText: expires === '' ? '' : `\nLa suspensión termina el: ${expires}`,
       }
     },
+  },
+
+  'account-appeal-received': {
+    subject: 'Nexus Battles VI — Recibimos tu apelación',
+    html: emailLayout({
+      preheader: 'Tu apelación está en revisión. Te avisaremos cuando haya una decisión.',
+      icon: 'check',
+      iconAlt: 'Apelación recibida',
+      title: 'Apelación recibida',
+      body:
+        emailParagraph('Hola {{displayName}},') +
+        emailParagraph('Recibimos tu apelación sobre la siguiente sanción:') +
+        emailFacts([
+          ['Sanción apelada', '{{sanctionTypeLabel}}'],
+          ['Referencia de la sanción', '{{sanctionId}}'],
+          ['Referencia de tu apelación', '{{appealId}}'],
+          ['Presentada el', '{{submittedAtLabel}}'],
+          ['Fecha de referencia para la decisión', '{{decisionDueAtLabel}}'],
+        ]) +
+        emailNote(
+          'Un panel de moderación revisará tu caso. Esta fecha es de referencia, no una garantía de respuesta exacta en ese día.',
+        ),
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    text: emailText({
+      title: 'Apelación recibida',
+      paragraphs: [
+        'Hola {{displayName}},',
+        'Recibimos tu apelación sobre la siguiente sanción.',
+        'Sanción apelada: {{sanctionTypeLabel}}\n' +
+          'Referencia de la sanción: {{sanctionId}}\n' +
+          'Referencia de tu apelación: {{appealId}}\n' +
+          'Presentada el: {{submittedAtLabel}}\n' +
+          'Fecha de referencia para la decisión: {{decisionDueAtLabel}}',
+        'Un panel de moderación revisará tu caso. Esta fecha es de referencia, no una garantía de respuesta exacta en ese día.',
+      ],
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    derive: (variables) => ({
+      sanctionTypeLabel: SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
+      submittedAtLabel: formatEmailDate(read(variables, 'submittedAt')),
+      decisionDueAtLabel: formatEmailDate(read(variables, 'decisionDueAt')),
+    }),
+  },
+
+  'account-appeal-resolved': {
+    subject: 'Nexus Battles VI — Ya se decidió tu apelación',
+    html: emailLayout({
+      preheader: 'Hay una decisión sobre tu apelación.',
+      icon: 'shield',
+      iconAlt: 'Apelación resuelta',
+      title: 'Apelación resuelta',
+      body:
+        emailParagraph('Hola {{displayName}},') +
+        emailParagraph('Ya revisamos tu apelación. Este es el resultado:') +
+        emailFacts([
+          ['Sanción apelada', '{{sanctionTypeLabel}}'],
+          ['Decisión', '{{decisionLabel}}'],
+          ['Resuelta el', '{{resolvedAtLabel}}'],
+          ['Referencia de tu apelación', '{{appealId}}'],
+        ]) +
+        emailParagraph('Motivo de la decisión: {{resolutionNotes}}'),
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    text: emailText({
+      title: 'Apelación resuelta',
+      paragraphs: [
+        'Hola {{displayName}},',
+        'Ya revisamos tu apelación. Este es el resultado.',
+        'Sanción apelada: {{sanctionTypeLabel}}\n' +
+          'Decisión: {{decisionLabel}}\n' +
+          'Resuelta el: {{resolvedAtLabel}}\n' +
+          'Referencia de tu apelación: {{appealId}}',
+        'Motivo de la decisión: {{resolutionNotes}}',
+      ],
+      action: { label: 'Ver mi cuenta', path: '/account' },
+      signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
+    }),
+    derive: (variables) => ({
+      sanctionTypeLabel: SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
+      decisionLabel:
+        APPEAL_DECISION_LABELS[read(variables, 'decision')] ?? read(variables, 'decision'),
+      resolvedAtLabel: formatEmailDate(read(variables, 'resolvedAt')),
+    }),
   },
 
   'commerce-purchase-confirmed-v1': {

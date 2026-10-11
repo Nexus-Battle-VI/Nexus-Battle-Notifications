@@ -33,6 +33,23 @@ const SAMPLES: Readonly<Record<string, RenderVariables>> = {
     appealWindowDays: 7,
     expiresAt: '2026-10-14T15:30:00.000Z',
   },
+  'account-appeal-received': {
+    displayName: 'Dabji',
+    appealId: 'ap-4f2e1a90',
+    sanctionId: 'b2f9a1c4-0d3e-4c55-9b0e-6f1f5d2a7e10',
+    sanctionType: 'TEMPORARY_SUSPENSION',
+    submittedAt: '2026-10-11T15:30:00.000Z',
+    decisionDueAt: '2026-11-01T15:30:00.000Z',
+  },
+  'account-appeal-resolved': {
+    displayName: 'Dabji',
+    appealId: 'ap-4f2e1a90',
+    sanctionId: 'b2f9a1c4-0d3e-4c55-9b0e-6f1f5d2a7e10',
+    sanctionType: 'TEMPORARY_SUSPENSION',
+    decision: 'OVERTURNED',
+    resolutionNotes: 'La evidencia aportada desvirtúa la causal original.',
+    resolvedAt: '2026-10-20T15:30:00.000Z',
+  },
   'commerce-purchase-confirmed-v1': {
     orderId: 'ORD-2026-0042',
     total: 'COP 61.00',
@@ -164,6 +181,51 @@ describe('plantillas de correo (EN-031)', () => {
       expect(formatEmailDate('')).toBe('')
       expect(formatEmailDate('no-es-fecha')).toBe('')
       expect(formatEmailDate('2026-10-11T15:30:00.000Z')).toContain('(hora de Colombia)')
+    })
+  })
+
+  describe('apelacion', () => {
+    it('account-appeal-received traduce el tipo de sancion y formatea las fechas', async () => {
+      const rendered = await renderer.render(
+        'account-appeal-received',
+        SAMPLES['account-appeal-received'] ?? {},
+      )
+
+      expect(rendered.html).toContain('Suspensión temporal')
+      expect(rendered.html).not.toContain('TEMPORARY_SUSPENSION')
+      expect(rendered.text).toContain('Presentada el: 11 de octubre de 2026')
+      expect(rendered.text).toContain('ap-4f2e1a90')
+    })
+
+    it('account-appeal-resolved traduce la decision OVERTURNED', async () => {
+      const rendered = await renderer.render(
+        'account-appeal-resolved',
+        SAMPLES['account-appeal-resolved'] ?? {},
+      )
+
+      expect(rendered.html).toContain('Se revirtió la sanción')
+      expect(rendered.html).not.toContain('OVERTURNED')
+      expect(rendered.text).toContain('desvirtúa la causal original')
+    })
+
+    it('account-appeal-resolved traduce la decision UPHELD', async () => {
+      const rendered = await renderer.render('account-appeal-resolved', {
+        ...SAMPLES['account-appeal-resolved'],
+        decision: 'UPHELD',
+      })
+
+      expect(rendered.html).toContain('Se mantiene la sanción')
+      expect(rendered.html).not.toContain('UPHELD')
+    })
+
+    it('account-appeal-resolved escapa el motivo de la decision (texto libre)', async () => {
+      const rendered = await renderer.render('account-appeal-resolved', {
+        ...SAMPLES['account-appeal-resolved'],
+        resolutionNotes: '<script>alert(1)</script>',
+      })
+
+      expect(rendered.html).not.toContain('<script>')
+      expect(rendered.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     })
   })
 
