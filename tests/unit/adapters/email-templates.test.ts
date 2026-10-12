@@ -227,6 +227,17 @@ describe('plantillas de correo (EN-031)', () => {
       expect(rendered.html).not.toContain('<script>')
       expect(rendered.html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
     })
+
+    it.each(['account-appeal-received', 'account-appeal-resolved'])(
+      '%s enlaza a /appeal, no a /account: una cuenta baneada no puede llegar a /account (HU-42)',
+      async (templateId) => {
+        const rendered = await renderer.render(templateId, SAMPLES[templateId] ?? {})
+
+        expect(rendered.html).toContain(`href="${PUBLIC_WEB_URL}/appeal"`)
+        expect(rendered.text).toContain(`${PUBLIC_WEB_URL}/appeal`)
+        expect(rendered.html).not.toContain(`href="${PUBLIC_WEB_URL}/account"`)
+      },
+    )
   })
 
   describe('producto del catalogo', () => {

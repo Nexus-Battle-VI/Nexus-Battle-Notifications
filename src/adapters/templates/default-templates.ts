@@ -89,9 +89,9 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
         ]) +
         '{{expiryHtml}}' +
         emailParagraph(
-          'Tienes <strong>{{appealWindowDays}} días</strong> para apelar desde tu cuenta. Indica la referencia de arriba.',
+          'Tienes <strong>{{appealWindowDays}} días</strong> para apelar. Si tu cuenta esta bloqueada, usa el mismo correo y contraseña en el enlace de abajo.',
         ),
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Apelar esta sanción', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     text: emailText({
@@ -104,9 +104,9 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
           'Aplicada el: {{appliedAtLabel}}\n' +
           'Puedes apelar hasta: {{appealDeadlineLabel}}\n' +
           'Referencia: {{sanctionId}}{{expiryText}}',
-        'Tienes {{appealWindowDays}} días para apelar desde tu cuenta. Indica la referencia de arriba.',
+        'Tienes {{appealWindowDays}} días para apelar. Si tu cuenta esta bloqueada, usa el mismo correo y contraseña en el enlace de abajo.',
       ],
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Apelar esta sanción', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     trustedHtml: ['expiryHtml'],
@@ -146,7 +146,7 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
         emailNote(
           'Un panel de moderación revisará tu caso. Esta fecha es de referencia, no una garantía de respuesta exacta en ese día.',
         ),
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Ver el estado de mi apelación', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     text: emailText({
@@ -161,11 +161,12 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
           'Fecha de referencia para la decisión: {{decisionDueAtLabel}}',
         'Un panel de moderación revisará tu caso. Esta fecha es de referencia, no una garantía de respuesta exacta en ese día.',
       ],
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Ver el estado de mi apelación', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     derive: (variables) => ({
-      sanctionTypeLabel: SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
+      sanctionTypeLabel:
+        SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
       submittedAtLabel: formatEmailDate(read(variables, 'submittedAt')),
       decisionDueAtLabel: formatEmailDate(read(variables, 'decisionDueAt')),
     }),
@@ -188,7 +189,7 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
           ['Referencia de tu apelación', '{{appealId}}'],
         ]) +
         emailParagraph('Motivo de la decisión: {{resolutionNotes}}'),
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Ver el estado de mi apelación', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     text: emailText({
@@ -202,11 +203,12 @@ export const DEFAULT_TEMPLATES: Readonly<Record<string, TemplateDefinition>> = {
           'Referencia de tu apelación: {{appealId}}',
         'Motivo de la decisión: {{resolutionNotes}}',
       ],
-      action: { label: 'Ver mi cuenta', path: '/account' },
+      action: { label: 'Ver el estado de mi apelación', path: '/appeal' },
       signature: 'Equipo Nexus Battles VI · Por una comunidad segura y justa',
     }),
     derive: (variables) => ({
-      sanctionTypeLabel: SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
+      sanctionTypeLabel:
+        SANCTION_LABELS[read(variables, 'sanctionType')] ?? read(variables, 'sanctionType'),
       decisionLabel:
         APPEAL_DECISION_LABELS[read(variables, 'decision')] ?? read(variables, 'decision'),
       resolvedAtLabel: formatEmailDate(read(variables, 'resolvedAt')),
